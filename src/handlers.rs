@@ -5,7 +5,6 @@ use crate::crypto::CryptoService;
 use uuid::Uuid;
 use redis::AsyncCommands;
 use sqlx::Row;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::atomic::Ordering;
 use chrono::Utc;
 
@@ -29,7 +28,6 @@ async fn create_local_session(state: &AppState, user_id: &str) -> anyhow::Result
 }
 
 async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<String> {
-    // Check for standard Appwrite header or Cookie
     let token_owned = req.headers().get("x-appwrite-jwt")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string())
@@ -38,7 +36,6 @@ async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<St
                 .map(|c| c.value().to_string())
         })
         .or_else(|| {
-            // Also check standard Appwrite session header if JWT is missing
             req.headers().get("x-fallback-session")
                 .and_then(|h| h.to_str().ok())
                 .map(|s| s.to_string())
@@ -207,6 +204,90 @@ pub async fn delete_session(
     HttpResponse::NoContent().finish()
 }
 
+#[get("/v1/databases/{db}/collections/{col}/documents/{id}")]
+pub async fn get_document(
+    req: HttpRequest,
+    path: web::Path<(String, String, String)>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    state.total_requests.fetch_add(1, Ordering::Relaxed);
+    let (db_id, col_id, doc_id) = path.into_inner();
+    
+    let user_id = match get_user_from_session(&req, &state).await {
+        Some(id) => id,
+        None => {
+            if validate_api_key(&req, &state) {
+                req.headers().get("x-appwrite-user-id").and_then(|h| h.to_str().ok()).unwrap_or("admin").to_string()
+            } else {
+                return HttpResponse::Unauthorized().finish();
+            }
+        }
+    };
+
+    let redis_key = format!("data:{}:{}", user_id, doc_id);
+    let lb_enabled = state.load_balancer_mode.load(Ordering::Relaxed);
+    let crypto = CryptoService::new(state.crypto_key.read().await.clone());
+
+    // Redis Read with LB
+    let mut cached_val: Option<String> = None;
+    if lb_enabled {
+        let mirrors = state.redis_mirrors.read().await;
+        let total = mirrors.len() + 1;
+        let idx = state.redis_read_index.fetch_add(1, Ordering::SeqCst) % total;
+        
+        if idx == 0 {
+            if let Ok(mut conn) = state.redis.get_async_connection().await {
+                cached_val = conn.get(&redis_key).await.ok();
+            }
+        } else if let Some(mirror) = mirrors.get(idx - 1) {
+            if let Ok(mut conn) = mirror.get_async_connection().await {
+                cached_val = conn.get(&redis_key).await.ok();
+            }
+        }
+    } else if let Ok(mut conn) = state.redis.get_async_connection().await {
+        cached_val = conn.get(&redis_key).await.ok();
+    }
+
+    if let Some(enc) = cached_val {
+        if let Ok(dec) = crypto.decrypt(&enc) {
+            let data: serde_json::Value = serde_json::from_slice(&dec).unwrap_or(serde_json::Value::Null);
+            return HttpResponse::Ok().json(AppwriteDocument {
+                id: doc_id,
+                collection_id: col_id,
+                database_id: db_id,
+                created_at: Utc::now().to_rfc3339(), // Placeholder
+                updated_at: Utc::now().to_rfc3339(),
+                data,
+            });
+        }
+    }
+
+    // Postgres Fallback
+    let row = sqlx::query("SELECT encrypted_content, created_at FROM data_store WHERE id = $1 AND user_id = $2")
+        .bind(Uuid::parse_str(&doc_id).unwrap_or_default())
+        .bind(&user_id)
+        .fetch_optional(&state.db)
+        .await;
+
+    if let Ok(Some(r)) = row {
+        let enc: String = r.get("encrypted_content");
+        let created: chrono::DateTime<Utc> = r.get("created_at");
+        if let Ok(dec) = crypto.decrypt(&enc) {
+            let data: serde_json::Value = serde_json::from_slice(&dec).unwrap_or(serde_json::Value::Null);
+            return HttpResponse::Ok().json(AppwriteDocument {
+                id: doc_id,
+                collection_id: col_id,
+                database_id: db_id,
+                created_at: created.to_rfc3339(),
+                updated_at: created.to_rfc3339(),
+                data,
+            });
+        }
+    }
+
+    HttpResponse::NotFound().finish()
+}
+
 #[post("/v1/databases/{db}/collections/{col}/documents")]
 pub async fn create_document(
     req: HttpRequest,
@@ -239,9 +320,9 @@ pub async fn create_document(
     let crypto = CryptoService::new(state.crypto_key.read().await.clone());
     let encrypted = crypto.encrypt(payload_str.as_bytes()).unwrap();
 
-    let id = Uuid::new_v4();
+    let internal_id = Uuid::new_v4();
     let res = sqlx::query("INSERT INTO data_store (id, user_id, encrypted_content) VALUES ($1, $2, $3)")
-        .bind(id)
+        .bind(internal_id)
         .bind(&user_id)
         .bind(&encrypted)
         .execute(&state.db)
@@ -303,7 +384,7 @@ fn update_env_file(key: &str, value: &str) -> std::io::Result<()> {
     let content = fs::read_to_string(".env").unwrap_or_default();
     let mut new_content = String::new();
     let mut found = false;
-    let prefix = format!("{}=", key);
+    let prefix = format!("{} =", key);
     for line in content.lines() {
         if line.starts_with(&prefix) {
             new_content.push_str(&format!("{}={}\n", key, value));
