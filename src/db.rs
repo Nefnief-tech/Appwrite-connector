@@ -232,17 +232,19 @@ async fn sync_mirrors(primary: &Pool<Postgres>, mirror: &Pool<Postgres>, data_st
     }
 
     // 2. Sync users
-    let users = sqlx::query("SELECT id, username, password_hash, created_at FROM users")
+    let users = sqlx::query("SELECT id, username, email, password_hash, created_at FROM users")
         .fetch_all(primary)
         .await?;
     for user in users {
         let id: String = user.get("id");
         let username: String = user.get("username");
+        let email: String = user.get("email");
         let hash: String = user.get("password_hash");
         let created: chrono::DateTime<chrono::Utc> = user.get("created_at");
-        sqlx::query("INSERT INTO users (id, username, password_hash, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING")
+        sqlx::query("INSERT INTO users (id, username, email, password_hash, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING")
             .bind(id)
             .bind(username)
+            .bind(email)
             .bind(hash)
             .bind(created)
             .execute(mirror)
