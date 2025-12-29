@@ -52,6 +52,7 @@ async fn main() -> std::io::Result<()> {
         crypto_key: Arc::new(RwLock::new(config.encryption_key.clone())),
         appwrite_api_key: config.appwrite_api_key.clone(),
         appwrite_endpoint: config.appwrite_endpoint.clone(),
+        appwrite_project_id: config.appwrite_project_id.clone(),
         under_attack: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         load_balancer_mode: Arc::new(std::sync::atomic::AtomicBool::new(config.load_balancer_mode)),
         redis_read_index: Arc::new(std::sync::atomic::AtomicUsize::new(0)),

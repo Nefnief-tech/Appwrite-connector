@@ -15,6 +15,7 @@ pub struct AppState {
     pub crypto_key: Arc<RwLock<Vec<u8>>>,
     pub appwrite_api_key: String,
     pub appwrite_endpoint: String,
+    pub appwrite_project_id: String,
     pub under_attack: Arc<AtomicBool>,
     pub load_balancer_mode: Arc<AtomicBool>,
     pub redis_read_index: Arc<AtomicUsize>,

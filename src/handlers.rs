@@ -452,10 +452,15 @@ fn validate_api_key(req: &HttpRequest, state: &AppState) -> bool {
 async fn verify_appwrite_session(req: &HttpRequest, state: &AppState) -> Option<String> {
     let jwt = req.headers().get("x-appwrite-jwt")?.to_str().ok()?;
     
+    // Try to get project ID from request headers first, fallback to config
+    let project_id = req.headers().get("x-appwrite-project")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or(&state.appwrite_project_id);
+
     let client = reqwest::Client::new();
     let res = client.get(format!("{}/account", state.appwrite_endpoint))
         .header("X-Appwrite-JWT", jwt)
-        .header("X-Appwrite-Project", "YOUR_PROJECT_ID") // Optional, but good practice
+        .header("X-Appwrite-Project", project_id)
         .send()
         .await
         .ok()?;

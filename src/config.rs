@@ -10,6 +10,7 @@ pub struct Config {
     pub encryption_key: Vec<u8>,
     pub appwrite_api_key: String,
     pub appwrite_endpoint: String,
+    pub appwrite_project_id: String,
     pub host: String,
     pub port: u16,
     pub load_balancer_mode: bool,
@@ -31,6 +32,7 @@ impl Config {
         let encryption_key = hex::decode(key_hex).expect("ENCRYPTION_KEY must be valid hex");
         let appwrite_api_key = env::var("APPWRITE_API_KEY").unwrap_or_else(|_| "secret_key".to_string());
         let appwrite_endpoint = env::var("APPWRITE_ENDPOINT").unwrap_or_else(|_| "https://cloud.appwrite.io/v1".to_string());
+        let appwrite_project_id = env::var("APPWRITE_PROJECT_ID").unwrap_or_else(|_| "YOUR_PROJECT_ID".to_string());
         let host = env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let port = env::var("PORT")
             .unwrap_or_else(|_| "8080".to_string())
@@ -52,6 +54,7 @@ impl Config {
             encryption_key,
             appwrite_api_key,
             appwrite_endpoint,
+            appwrite_project_id,
             host,
             port,
             load_balancer_mode,
