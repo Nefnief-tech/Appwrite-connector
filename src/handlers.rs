@@ -398,17 +398,23 @@ fn update_env_file(key: &str, value: &str) -> std::io::Result<()> {
     let content = fs::read_to_string(".env").unwrap_or_default();
     let mut new_content = String::new();
     let mut found = false;
-    let prefix = format!("{} =", key);
+    let prefix = format!("{}=", key);
     for line in content.lines() {
-        if line.starts_with(&prefix) {
-            new_content.push_str(&format!("{}={}\n", key, value));
-            found = true;
+        let trimmed = line.trim();
+        if trimmed.starts_with(&prefix) {
+            if !found {
+                new_content.push_str(&format!("{}={}\n", key, value));
+                found = true;
+            }
+            // Skip subsequent duplicates of the same key
         } else {
             new_content.push_str(line);
             new_content.push_str("\n");
         }
     }
-    if !found { new_content.push_str(&format!("{}={}\n", key, value)); }
+    if !found {
+        new_content.push_str(&format!("{}={}\n", key, value));
+    }
     fs::write(".env", new_content)
 }
 
