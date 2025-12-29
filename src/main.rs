@@ -14,7 +14,7 @@ use handlers::{
     list_roles, update_role_definition, login, register, 
     get_stats, list_users, add_database, list_databases, get_db_status,
     reroll_key, reroll_key_logic, toggle_under_attack, get_security_status,
-    toggle_load_balancer, add_redis_mirror, list_redis_mirrors
+    toggle_load_balancer, add_redis_mirror, list_redis_mirrors, proxy_to_appwrite
 };
 use dotenv::dotenv;
 use std::sync::Arc;
@@ -111,7 +111,8 @@ async fn main() -> std::io::Result<()> {
             .service(get_security_status)
             .service(toggle_load_balancer)
             .service(reroll_key)
-            .service(fs::Files::new("/", "./").index_file("test_app.html"))
+            .service(fs::Files::new("/console", "./").index_file("test_app.html"))
+            .default_service(web::to(proxy_to_appwrite))
     })
     .bind((config.host, config.port))?
     .run()

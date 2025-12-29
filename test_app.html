@@ -484,9 +484,11 @@
         let activeTab = 'dashboard';
 
         const api = async (p, m = 'GET', b = null) => {
-            console.log(`API Call: ${m} ${p}`);
+            // Ensure path is absolute from root if it doesn't start with /
+            const url = p.startsWith('/') ? p : `/${p}`;
+            console.log(`API Call: ${m} ${url}`);
             const h = { 'Content-Type': 'application/json', 'x-appwrite-key': 'secret_key', 'x-appwrite-user-id': session?.user_id || '' };
-            const r = await fetch(p, { method: m, headers: h, body: b ? JSON.stringify(b) : null });
+            const r = await fetch(url, { method: m, headers: h, body: b ? JSON.stringify(b) : null });
             if (!r.ok) {
                 const errText = await r.text();
                 console.error(`API Error ${r.status}: ${errText}`);
@@ -494,7 +496,7 @@
             }
             const ct = r.headers.get("content-type");
             const data = ct && ct.includes("application/json") ? await r.json() : { message: await r.text() };
-            console.log(`API Success: ${m} ${p}`, data);
+            console.log(`API Success: ${m} ${url}`, data);
             return data;
         };
 

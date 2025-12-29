@@ -970,6 +970,58 @@ pub async fn get_data(
     }
 }
 
+pub async fn proxy_to_appwrite(
+    req: HttpRequest,
+    body: web::Bytes,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let path = req.path();
+    let method_str = req.method().as_str();
+    let query = req.query_string();
+    
+    let url = if query.is_empty() {
+        format!("{}{}", state.appwrite_endpoint, path)
+    } else {
+        format!("{}{}?{}", state.appwrite_endpoint, path, query)
+    };
+
+    let client = reqwest::Client::new();
+    let method = reqwest::Method::from_bytes(method_str.as_bytes()).unwrap_or(reqwest::Method::GET);
+    let mut proxy_req = client.request(method, url);
+
+    // Forward headers
+    for (name, value) in req.headers().iter() {
+        let name_str = name.as_str();
+        if name_str.to_lowercase() != "host" {
+            proxy_req = proxy_req.header(name_str, value.as_bytes());
+        }
+    }
+
+    // Send body
+    let res = proxy_req
+        .body(body)
+        .send()
+        .await;
+
+    match res {
+        Ok(response) => {
+            let status_u16 = response.status().as_u16();
+            let mut client_resp = HttpResponse::build(actix_web::http::StatusCode::from_u16(status_u16).unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR));
+            
+            for (name, value) in response.headers().iter() {
+                client_resp.insert_header((name.as_str(), value.as_bytes()));
+            }
+
+            let bytes = response.bytes().await.unwrap_or_default();
+            client_resp.body(bytes)
+        },
+        Err(e) => {
+            log::error!("Proxy error: {}", e);
+            HttpResponse::InternalServerError().body(format!("Proxy error: {}", e))
+        }
+    }
+}
+
 fn decrypt_and_respond(enc: String, crypto: CryptoService) -> HttpResponse {
     match crypto.decrypt(&enc) {
         Ok(decrypted_bytes) => {
