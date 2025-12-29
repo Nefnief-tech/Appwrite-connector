@@ -288,6 +288,62 @@ pub async fn get_document(
     HttpResponse::NotFound().finish()
 }
 
+#[get("/v1/databases/{db}/collections/{col}/documents")]
+pub async fn list_documents(
+    req: HttpRequest,
+    path: web::Path<(String, String)>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    state.total_requests.fetch_add(1, Ordering::Relaxed);
+    let (db_id, col_id) = path.into_inner();
+    
+    let user_id = match get_user_from_session(&req, &state).await {
+        Some(id) => id,
+        None => {
+            if validate_api_key(&req, &state) {
+                req.headers().get("x-appwrite-user-id").and_then(|h| h.to_str().ok()).unwrap_or("admin").to_string()
+            } else {
+                return HttpResponse::Unauthorized().finish();
+            }
+        }
+    };
+
+    let rows = sqlx::query("SELECT id, encrypted_content, created_at FROM data_store WHERE database_id = $1 AND collection_id = $2 AND user_id = $3 ORDER BY created_at DESC")
+        .bind(&db_id)
+        .bind(&col_id)
+        .bind(&user_id)
+        .fetch_all(&state.db)
+        .await;
+
+    match rows {
+        Ok(rows) => {
+            let crypto = CryptoService::new(state.crypto_key.read().await.clone());
+            let mut documents = Vec::new();
+            for row in rows {
+                let id: Uuid = row.get("id");
+                let enc: String = row.get("encrypted_content");
+                let created: chrono::DateTime<Utc> = row.get("created_at");
+                if let Ok(dec) = crypto.decrypt(&enc) {
+                    let data: serde_json::Value = serde_json::from_slice(&dec).unwrap_or(serde_json::Value::Null);
+                    documents.push(AppwriteDocument {
+                        id: id.to_string(),
+                        collection_id: col_id.clone(),
+                        database_id: db_id.clone(),
+                        created_at: created.to_rfc3339(),
+                        updated_at: created.to_rfc3339(),
+                        data,
+                    });
+                }
+            }
+            HttpResponse::Ok().json(AppwriteDocumentList {
+                total: documents.len() as i64,
+                documents,
+            })
+        },
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
 #[post("/v1/databases/{db}/collections/{col}/documents")]
 pub async fn create_document(
     req: HttpRequest,
@@ -321,8 +377,10 @@ pub async fn create_document(
     let encrypted = crypto.encrypt(payload_str.as_bytes()).unwrap();
 
     let internal_id = Uuid::new_v4();
-    let res = sqlx::query("INSERT INTO data_store (id, user_id, encrypted_content) VALUES ($1, $2, $3)")
+    let res = sqlx::query("INSERT INTO data_store (id, database_id, collection_id, user_id, encrypted_content) VALUES ($1, $2, $3, $4, $5)")
         .bind(internal_id)
+        .bind(&db_id)
+        .bind(&col_id)
         .bind(&user_id)
         .bind(&encrypted)
         .execute(&state.db)

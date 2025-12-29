@@ -121,6 +121,12 @@ pub struct AppwriteDocument {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AppwriteDocumentList {
+    pub total: i64,
+    pub documents: Vec<AppwriteDocument>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DatabaseStatus {
     pub name: String,
     pub url: String,
