@@ -200,56 +200,71 @@ pub async fn create_session(
     let email = data["email"].as_str().unwrap_or("");
     let password = data["password"].as_str().unwrap_or("");
     
+    log::debug!("Login attempt for email: {}", email);
+
     let row = sqlx::query("SELECT id, password_hash FROM users WHERE email = $1")
         .bind(email)
         .fetch_optional(&state.db)
         .await;
 
-    if let Ok(Some(r)) = row {
-        let enc_hash: String = r.get("password_hash");
-        let crypto = CryptoService::new(state.crypto_key.read().await.clone());
-        if let Ok(dec_hash) = crypto.decrypt(&enc_hash) {
-            let hash = String::from_utf8_lossy(&dec_hash);
-            if bcrypt::verify(password, &hash).unwrap_or(false) {
-                let user_id: String = r.get("id");
-                if let Ok(token) = create_local_session(&state, &user_id).await {
-                    let now = Utc::now();
-                    let expire = now + chrono::Duration::seconds(state.session_duration as i64);
-                    
-                    let project_id = req.headers().get("x-appwrite-project")
-                        .and_then(|h| h.to_str().ok())
-                        .unwrap_or("console");
+    match row {
+        Ok(Some(r)) => {
+            let enc_hash: String = r.get("password_hash");
+            let crypto = CryptoService::new(state.crypto_key.read().await.clone());
+            match crypto.decrypt(&enc_hash) {
+                Ok(dec_hash) => {
+                    let hash = String::from_utf8_lossy(&dec_hash);
+                    match bcrypt::verify(password, &hash) {
+                        Ok(true) => {
+                            let user_id: String = r.get("id");
+                            if let Ok(token) = create_local_session(&state, &user_id).await {
+                                let now = Utc::now();
+                                let expire = now + chrono::Duration::seconds(state.session_duration as i64);
+                                
+                                let project_id = req.headers().get("x-appwrite-project")
+                                    .and_then(|h| h.to_str().ok())
+                                    .unwrap_or("console");
 
-                    let cookie_name = if project_id == "console" {
-                        "a_session_console".to_string()
-                    } else {
-                        format!("a_session_{}", project_id)
-                    };
+                                let cookie_name = if project_id == "console" {
+                                    "a_session_console".to_string()
+                                } else {
+                                    format!("a_session_{}", project_id)
+                                };
 
-                    return HttpResponse::Created()
-                        .cookie(actix_web::cookie::Cookie::build("a_session_console", &token)
-                            .path("/")
-                            .http_only(true)
-                            .same_site(actix_web::cookie::SameSite::Lax)
-                            .secure(false)
-                            .finish())
-                        .cookie(actix_web::cookie::Cookie::build(cookie_name, &token)
-                            .path("/")
-                            .http_only(true)
-                            .same_site(actix_web::cookie::SameSite::Lax)
-                            .secure(false)
-                            .finish())
-                        .json(AppwriteSession {
-                            id: token,
-                            created_at: now.to_rfc3339(),
-                            user_id,
-                            expire: expire.to_rfc3339(),
-                            provider: "email".to_string(),
-                        });
-                }
+                                log::info!("Login successful for user: {}", user_id);
+                                return HttpResponse::Created()
+                                    .cookie(actix_web::cookie::Cookie::build("a_session_console", &token)
+                                        .path("/")
+                                        .http_only(true)
+                                        .same_site(actix_web::cookie::SameSite::Lax)
+                                        .secure(false)
+                                        .finish())
+                                    .cookie(actix_web::cookie::Cookie::build(cookie_name, &token)
+                                        .path("/")
+                                        .http_only(true)
+                                        .same_site(actix_web::cookie::SameSite::Lax)
+                                        .secure(false)
+                                        .finish())
+                                    .json(AppwriteSession {
+                                        id: token,
+                                        created_at: now.to_rfc3339(),
+                                        user_id,
+                                        expire: expire.to_rfc3339(),
+                                        provider: "email".to_string(),
+                                    });
+                            }
+                        },
+                        Ok(false) => log::warn!("Invalid password for email: {}", email),
+                        Err(e) => log::error!("Bcrypt verify error: {}", e),
+                    }
+                },
+                Err(e) => log::error!("Hash decryption failed during login: {}", e),
             }
-        }
+        },
+        Ok(None) => log::warn!("User not found for email: {}", email),
+        Err(e) => log::error!("Database error during login query: {}", e),
     }
+    
     HttpResponse::Unauthorized().body("Invalid credentials")
 }
 
@@ -542,19 +557,38 @@ pub async fn wipe_database(
     
     log::warn!("FULL SYSTEM WIPE REQUESTED");
 
-    // 1. Clear Database Tables
+    // 1. Clear Database Tables (Primary)
     let tables = vec!["data_store", "users", "user_profiles", "registered_databases", "registered_redis"];
-    for table in tables {
+    for table in &tables {
         let query = format!("TRUNCATE TABLE {} CASCADE", table);
         if let Err(e) = sqlx::query(&query).execute(&state.db).await {
-            log::error!("Failed to truncate table {}: {}", table, e);
+            log::error!("Failed to truncate primary table {}: {}", table, e);
         }
     }
 
-    // 2. Reset default roles
+    // 2. Clear Database Tables (Mirrors)
+    {
+        let mirrors = state.mirrors.read().await;
+        for mirror in mirrors.iter() {
+            for table in &tables {
+                let query = format!("TRUNCATE TABLE {} CASCADE", table);
+                let _ = sqlx::query(&query).execute(mirror).await;
+            }
+        }
+    }
+
+    // 3. Reset default roles (Primary)
     let _ = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{\"data:read\", \"data:write\", \"roles:manage\"}'), ('user', '{\"data:read\", \"data:write\"}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(&state.db).await;
 
-    // 3. Clear Redis
+    // 4. Reset default roles (Mirrors)
+    {
+        let mirrors = state.mirrors.read().await;
+        for mirror in mirrors.iter() {
+            let _ = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{\"data:read\", \"data:write\", \"roles:manage\"}'), ('user', '{\"data:read\", \"data:write\"}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(mirror).await;
+        }
+    }
+
+    // 5. Clear Redis
     if let Ok(mut conn) = state.redis.get_async_connection().await {
         let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap_or_default();
     }
