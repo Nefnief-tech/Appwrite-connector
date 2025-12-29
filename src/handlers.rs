@@ -8,7 +8,28 @@ use sqlx::Row;
 use std::sync::atomic::Ordering;
 use chrono::Utc;
 
-// --- Helper: Local Session Management ---
+// --- Helpers ---
+
+async fn decrypt_smart(state: &AppState, encrypted_data: &str) -> Option<Vec<u8>> {
+    // 1. Try current key in memory first (Fastest)
+    let current_key = state.crypto_key.read().await.clone();
+    let crypto = CryptoService::new(current_key);
+    if let Ok(dec) = crypto.decrypt(encrypted_data) {
+        return Some(dec);
+    }
+
+    // 2. Fallback to all keys in keys.json
+    if let Ok(ks) = crate::crypto::KeyStore::load() {
+        for key_bytes in ks.get_all_keys() {
+            let fallback_crypto = CryptoService::new(key_bytes);
+            if let Ok(dec) = fallback_crypto.decrypt(encrypted_data) {
+                return Some(dec);
+            }
+        }
+    }
+
+    None
+}
 
 async fn create_local_session(state: &AppState, user_id: &str) -> anyhow::Result<String> {
     let session_token = Uuid::new_v4().to_string();
@@ -215,55 +236,53 @@ pub async fn create_session(
     match row {
         Ok(Some(r)) => {
             let enc_hash: String = r.get("password_hash");
-            let crypto = CryptoService::new(state.crypto_key.read().await.clone());
-            match crypto.decrypt(&enc_hash) {
-                Ok(dec_hash) => {
-                    let hash = String::from_utf8_lossy(&dec_hash);
-                    match bcrypt::verify(password, &hash) {
-                        Ok(true) => {
-                            let user_id: String = r.get("id");
-                            if let Ok(token) = create_local_session(&state, &user_id).await {
-                                let now = Utc::now();
-                                let expire = now + chrono::Duration::seconds(state.session_duration as i64);
-                                
-                                let project_id = req.headers().get("x-appwrite-project")
-                                    .and_then(|h| h.to_str().ok())
-                                    .unwrap_or("console");
+            if let Some(dec_hash) = decrypt_smart(&state, &enc_hash).await {
+                let hash = String::from_utf8_lossy(&dec_hash);
+                match bcrypt::verify(password, &hash) {
+                    Ok(true) => {
+                        let user_id: String = r.get("id");
+                        if let Ok(token) = create_local_session(&state, &user_id).await {
+                            let now = Utc::now();
+                            let expire = now + chrono::Duration::seconds(state.session_duration as i64);
+                            
+                            let project_id = req.headers().get("x-appwrite-project")
+                                .and_then(|h| h.to_str().ok())
+                                .unwrap_or("console");
 
-                                let cookie_name = if project_id == "console" {
-                                    "a_session_console".to_string()
-                                } else {
-                                    format!("a_session_{}", project_id)
-                                };
+                            let cookie_name = if project_id == "console" {
+                                "a_session_console".to_string()
+                            } else {
+                                format!("a_session_{}", project_id)
+                            };
 
-                                log::info!("Login successful for user: {}", user_id);
-                                return HttpResponse::Created()
-                                    .cookie(actix_web::cookie::Cookie::build("a_session_console", &token)
-                                        .path("/")
-                                        .http_only(true)
-                                        .same_site(actix_web::cookie::SameSite::None)
-                                        .secure(true)
-                                        .finish())
-                                    .cookie(actix_web::cookie::Cookie::build(cookie_name, &token)
-                                        .path("/")
-                                        .http_only(true)
-                                        .same_site(actix_web::cookie::SameSite::None)
-                                        .secure(true)
-                                        .finish())
-                                    .json(AppwriteSession {
-                                        id: token,
-                                        created_at: now.to_rfc3339(),
-                                        user_id,
-                                        expire: expire.to_rfc3339(),
-                                        provider: "email".to_string(),
-                                    });
-                            }
-                        },
-                        Ok(false) => log::warn!("Invalid password for email: {}", email),
-                        Err(e) => log::error!("Bcrypt verify error: {}", e),
-                    }
-                },
-                Err(e) => log::error!("Hash decryption failed during login: {}", e),
+                            log::info!("Login successful for user: {}", user_id);
+                            return HttpResponse::Created()
+                                .cookie(actix_web::cookie::Cookie::build("a_session_console", &token)
+                                    .path("/")
+                                    .http_only(true)
+                                    .same_site(actix_web::cookie::SameSite::None)
+                                    .secure(true)
+                                    .finish())
+                                .cookie(actix_web::cookie::Cookie::build(cookie_name, &token)
+                                    .path("/")
+                                    .http_only(true)
+                                    .same_site(actix_web::cookie::SameSite::None)
+                                    .secure(true)
+                                    .finish())
+                                .json(AppwriteSession {
+                                    id: token,
+                                    created_at: now.to_rfc3339(),
+                                    user_id,
+                                    expire: expire.to_rfc3339(),
+                                    provider: "email".to_string(),
+                                });
+                        }
+                    },
+                    Ok(false) => log::warn!("Invalid password for email: {}", email),
+                    Err(e) => log::error!("Bcrypt verify error: {}", e),
+                }
+            } else {
+                log::error!("Hash decryption failed during login for email: {}. Current key might be out of sync.", email);
             }
         },
         Ok(None) => log::warn!("User not found for email: {}", email),
@@ -311,7 +330,6 @@ pub async fn get_document(
 
     let redis_key = format!("data:{}:{}", user_id, doc_id);
     let lb_enabled = state.load_balancer_mode.load(Ordering::Relaxed);
-    let crypto = CryptoService::new(state.crypto_key.read().await.clone());
 
     // Redis Read with LB
     let mut cached_val: Option<String> = None;
@@ -334,7 +352,7 @@ pub async fn get_document(
     }
 
     if let Some(enc) = cached_val {
-        if let Ok(dec) = crypto.decrypt(&enc) {
+        if let Some(dec) = decrypt_smart(&state, &enc).await {
             let data: serde_json::Value = serde_json::from_slice(&dec).unwrap_or(serde_json::Value::Null);
             return HttpResponse::Ok().json(AppwriteDocument {
                 id: doc_id,
@@ -357,7 +375,7 @@ pub async fn get_document(
     if let Ok(Some(r)) = row {
         let enc: String = r.get("encrypted_content");
         let created: chrono::DateTime<Utc> = r.get("created_at");
-        if let Ok(dec) = crypto.decrypt(&enc) {
+        if let Some(dec) = decrypt_smart(&state, &enc).await {
             let data: serde_json::Value = serde_json::from_slice(&dec).unwrap_or(serde_json::Value::Null);
             return HttpResponse::Ok().json(AppwriteDocument {
                 id: doc_id,
@@ -402,13 +420,12 @@ pub async fn list_documents(
 
     match rows {
         Ok(rows) => {
-            let crypto = CryptoService::new(state.crypto_key.read().await.clone());
             let mut documents = Vec::new();
             for row in rows {
                 let id: Uuid = row.get("id");
                 let enc: String = row.get("encrypted_content");
                 let created: chrono::DateTime<Utc> = row.get("created_at");
-                if let Ok(dec) = crypto.decrypt(&enc) {
+                if let Some(dec) = decrypt_smart(&state, &enc).await {
                     let data: serde_json::Value = serde_json::from_slice(&dec).unwrap_or(serde_json::Value::Null);
                     documents.push(AppwriteDocument {
                         id: id.to_string(),
@@ -614,13 +631,13 @@ pub async fn wipe_database(
 pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
     log::info!("Starting atomic master key reroll process...");
     
-    // 1. Fetch all data using a READ lock
-    let (data_rows, user_rows, old_key) = {
-        let key_lock = state.crypto_key.read().await;
-        let data = sqlx::query("SELECT id, database_id, collection_id, user_id, encrypted_content FROM data_store").fetch_all(&state.db).await?;
-        let users = sqlx::query("SELECT id, username, email, password_hash FROM users").fetch_all(&state.db).await?;
-        (data, users, key_lock.clone())
-    };
+    // Acquire WRITE lock for the entire duration to prevent any other encryption/decryption
+    let mut key_lock = state.crypto_key.write().await;
+    let old_key = key_lock.clone();
+    
+    // 1. Fetch all data
+    let data_rows = sqlx::query("SELECT id, database_id, collection_id, user_id, encrypted_content FROM data_store").fetch_all(&state.db).await?;
+    let user_rows = sqlx::query("SELECT id, username, email, password_hash FROM users").fetch_all(&state.db).await?;
 
     let old_crypto = CryptoService::new(old_key);
     let new_key = CryptoService::generate_key();
@@ -653,10 +670,8 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
         new_user_payloads.push((id, new_enc));
     }
 
-    // 3. Acquire WRITE lock and start transaction
-    log::info!("Verification successful. Acquiring write lock and committing to database...");
-    let mut key_lock = state.crypto_key.write().await;
-    
+    // 3. Commit to database
+    log::info!("Verification successful. Committing to database...");
     let mut tx = state.db.begin().await?;
 
     for (id, new_enc) in &new_data_payloads {

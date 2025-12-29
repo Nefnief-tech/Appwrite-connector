@@ -38,6 +38,15 @@ impl KeyStore {
         self.last_updated = chrono::Utc::now().to_rfc3339();
         self.save()
     }
+
+    pub fn get_all_keys(&self) -> Vec<Vec<u8>> {
+        let mut keys = Vec::new();
+        if let Ok(k) = hex::decode(&self.current_key) { keys.push(k); }
+        for pk in self.previous_keys.iter().rev() {
+            if let Ok(k) = hex::decode(pk) { keys.push(k); }
+        }
+        keys
+    }
 }
 
 pub struct CryptoService {

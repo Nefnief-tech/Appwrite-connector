@@ -840,12 +840,27 @@
         };
         const closeModals = () => document.getElementById('modalOverlay').classList.replace('flex', 'hidden');
 
-        const initApp = () => {
+        const initApp = async () => {
             if(!session) return;
+            
+            // If session is an AppwriteSession object, it might not have the name
+            if (!session.name && !session.username) {
+                try {
+                    const account = await api('/v1/account');
+                    session.username = account.name || account.email || 'User';
+                } catch (e) {
+                    session.username = 'User';
+                }
+            } else if (session.name) {
+                session.username = session.name;
+            }
+
             document.getElementById('authScreen').classList.add('hidden');
             document.getElementById('appShell').classList.remove('hidden');
-            document.getElementById('currentUsername').innerText = session.username;
-            document.getElementById('userInitial').innerText = session.username[0].toUpperCase();
+            
+            const displayName = session.username || 'User';
+            document.getElementById('currentUsername').innerText = displayName;
+            document.getElementById('userInitial').innerText = displayName[0].toUpperCase();
             showTab('dashboard');
         };
 
