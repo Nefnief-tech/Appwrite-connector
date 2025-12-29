@@ -5,6 +5,40 @@ use aes_gcm::{
 use anyhow::{anyhow, Result};
 use rand::RngCore;
 use base64::Engine;
+use serde::{Serialize, Deserialize};
+use std::fs;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct KeyStore {
+    pub current_key: String, // Hex encoded
+    pub previous_keys: Vec<String>,
+    pub last_updated: String,
+}
+
+impl KeyStore {
+    pub fn load() -> Result<Self> {
+        let path = "keys.json";
+        if !std::path::Path::new(path).exists() {
+            return Err(anyhow!("keys.json not found"));
+        }
+        let content = fs::read_to_string(path)?;
+        let ks: Self = serde_json::from_str(&content)?;
+        Ok(ks)
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let content = serde_json::to_string_pretty(self)?;
+        fs::write("keys.json", content)?;
+        Ok(())
+    }
+
+    pub fn update_key(&mut self, new_key_hex: String) -> Result<()> {
+        self.previous_keys.push(self.current_key.clone());
+        self.current_key = new_key_hex;
+        self.last_updated = chrono::Utc::now().to_rfc3339();
+        self.save()
+    }
+}
 
 pub struct CryptoService {
     key: Vec<u8>,

@@ -375,7 +375,21 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
     }
 
     *key_lock = new_key.clone();
-    let _ = update_env_file("ENCRYPTION_KEY", &hex::encode(new_key));
+    let new_hex = hex::encode(new_key);
+    
+    // Update keys.json
+    if let Ok(mut ks) = crate::crypto::KeyStore::load() {
+        let _ = ks.update_key(new_hex.clone());
+    } else {
+        let ks = crate::crypto::KeyStore {
+            current_key: new_hex.clone(),
+            previous_keys: Vec::new(),
+            last_updated: Utc::now().to_rfc3339(),
+        };
+        let _ = ks.save();
+    }
+
+    let _ = update_env_file("ENCRYPTION_KEY", &new_hex);
     Ok(())
 }
 
