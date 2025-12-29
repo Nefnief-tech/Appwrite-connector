@@ -214,6 +214,97 @@ fn update_env_file(key: &str, value: &str) -> std::io::Result<()> {
     fs::write(".env", new_content)
 }
 
+#[get("/admin/redis")]
+pub async fn list_redis_mirrors(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let is_auth = validate_api_key(&req, &state) || verify_appwrite_session(&req, &state).await.is_some();
+    if !is_auth { return HttpResponse::Unauthorized().body("Unauthorized"); }
+
+    let mut statuses = Vec::new();
+
+    // Primary Redis
+    let mut primary_conn = state.redis.get_async_connection().await;
+    let primary_online = match &mut primary_conn {
+        Ok(c) => redis::cmd("PING").query_async::<_, String>(c).await.is_ok(),
+        Err(_) => false,
+    };
+    
+    statuses.push(DatabaseStatus {
+        name: "Primary Redis".to_string(),
+        url: "PROTECTED".to_string(),
+        online: primary_online,
+        is_mirror: false,
+    });
+
+    // Mirror Redis from DB
+    let mirrors = sqlx::query("SELECT name, url FROM registered_redis")
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+    for row in mirrors {
+        let name: String = row.get("name");
+        let url: String = row.get("url");
+        
+        let mut client = crate::db::init_redis(&url);
+        let online = match &mut client {
+            Ok(c) => {
+                if let Ok(mut conn) = c.get_async_connection().await {
+                    redis::cmd("PING").query_async::<_, String>(&mut conn).await.is_ok()
+                } else { false }
+            },
+            Err(_) => false,
+        };
+
+        statuses.push(DatabaseStatus {
+            name,
+            url,
+            online,
+            is_mirror: true,
+        });
+    }
+
+    HttpResponse::Ok().json(statuses)
+}
+
+#[post("/admin/redis")]
+pub async fn add_redis_mirror(
+    req: HttpRequest,
+    data: web::Json<DatabaseConfig>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let is_auth = validate_api_key(&req, &state) || verify_appwrite_session(&req, &state).await.is_some();
+    if !is_auth { return HttpResponse::Unauthorized().body("Unauthorized"); }
+
+    // 1. Try to connect
+    let client = match crate::db::init_redis(&data.url) {
+        Ok(c) => c,
+        Err(e) => return HttpResponse::BadRequest().body(format!("Invalid Redis URL: {}", e)),
+    };
+
+    if let Err(e) = client.get_async_connection().await {
+        return HttpResponse::BadRequest().body(format!("Failed to connect to Redis: {}", e));
+    }
+
+    // 2. Persist
+    let res = sqlx::query("INSERT INTO registered_redis (name, url) VALUES ($1, $2)")
+        .bind(&data.name)
+        .bind(&data.url)
+        .execute(&state.db)
+        .await;
+
+    match res {
+        Ok(_) => {
+            let mut mirrors = state.redis_mirrors.write().await;
+            mirrors.push(client);
+            HttpResponse::Ok().json(MessageResponse { message: "Redis mirror added".to_string() })
+        },
+        Err(e) => HttpResponse::InternalServerError().body(format!("Database error: {}", e)),
+    }
+}
+
 #[get("/admin/db-status")]
 pub async fn get_db_status(
     req: HttpRequest,

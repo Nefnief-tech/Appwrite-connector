@@ -14,7 +14,7 @@ use handlers::{
     list_roles, update_role_definition, login, register, 
     get_stats, list_users, add_database, list_databases, get_db_status,
     reroll_key, reroll_key_logic, toggle_under_attack, get_security_status,
-    toggle_load_balancer
+    toggle_load_balancer, add_redis_mirror, list_redis_mirrors
 };
 use dotenv::dotenv;
 use std::sync::Arc;
@@ -33,10 +33,14 @@ async fn main() -> std::io::Result<()> {
     let mirrors = init_mirrors(&pool).await.expect("Failed to initialize mirrors");
     log::info!("Loaded {} database mirrors from registry", mirrors.len());
     let redis_client = init_redis(&config.redis_url).expect("Failed to connect to Redis");
-    let mut redis_mirrors = Vec::new();
+    let mut redis_mirrors = db::init_redis_mirrors(&pool).await.expect("Failed to load Redis mirrors from DB");
+    
+    // Also include env-defined mirrors if not already present
     for url in &config.redis_mirrors {
-        if let Ok(client) = init_redis(url) {
-            redis_mirrors.push(client);
+        if !redis_mirrors.iter().any(|c| c.get_connection_info().addr.to_string().contains(url)) {
+            if let Ok(client) = init_redis(url) {
+                redis_mirrors.push(client);
+            }
         }
     }
 
@@ -98,6 +102,8 @@ async fn main() -> std::io::Result<()> {
             .service(add_database)
             .service(list_databases)
             .service(get_db_status)
+            .service(list_redis_mirrors)
+            .service(add_redis_mirror)
             .service(toggle_under_attack)
             .service(get_security_status)
             .service(toggle_load_balancer)

@@ -215,7 +215,10 @@
                         <h1 class="text-3xl font-bold text-white tracking-tight">Infrastructure</h1>
                         <p class="text-slate-500 mt-1">Manage database redundancy and system mirrors.</p>
                     </div>
-                    <button onclick="openModal('dbModal')" class="btn-primary px-5 py-2.5 rounded-xl font-bold text-sm">Add Mirror</button>
+                    <div class="flex gap-2">
+                        <button onclick="openModal('redisModal')" class="bg-slate-800 hover:bg-slate-700 px-5 py-2.5 rounded-xl font-bold text-sm">Add Redis Mirror</button>
+                        <button onclick="openModal('dbModal')" class="btn-primary px-5 py-2.5 rounded-xl font-bold text-sm">Add DB Mirror</button>
+                    </div>
                 </div>
 
                 <div class="grid grid-cols-1 gap-6">
@@ -236,6 +239,28 @@
                                 </thead>
                                 <tbody id="dbStatusList" class="divide-y divide-slate-800">
                                     <!-- DB list will be here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="card-glass p-6">
+                        <h3 class="font-bold mb-6 flex items-center gap-2">
+                            <i class="bi bi-lightning-charge-fill text-yellow-500"></i>
+                            Cache Infrastructure (Redis)
+                        </h3>
+                        <div class="overflow-hidden rounded-xl border border-slate-800">
+                            <table class="w-full text-left text-sm">
+                                <thead class="bg-slate-900/50">
+                                    <tr>
+                                        <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Node Name</th>
+                                        <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Type</th>
+                                        <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Endpoint</th>
+                                        <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="redisStatusList" class="divide-y divide-slate-800">
+                                    <!-- Redis list will be here -->
                                 </tbody>
                             </table>
                         </div>
@@ -408,6 +433,26 @@
                 <button onclick="addMirror()" class="btn-primary px-6 py-2 rounded-xl text-sm font-bold">Initialize & Connect</button>
             </div>
         </div>
+        <div id="redisModal" class="modal-box card-glass bg-slate-950 w-full max-w-md p-8 hidden flex flex-col gap-6 shadow-2xl">
+            <h3 class="text-xl font-bold text-white">Add Redis Mirror</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Node Name</label>
+                    <input type="text" id="redisName" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none" placeholder="e.g. Redis Replica (Asia)">
+                </div>
+                <div>
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Redis URL</label>
+                    <input type="text" id="redisUrlInput" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none font-mono text-xs" placeholder="redis://127.0.0.1:6379">
+                </div>
+                <div class="p-4 bg-yellow-600/10 border border-yellow-500/20 rounded-xl">
+                    <p class="text-[10px] text-yellow-400">New mirrors will be automatically synchronized on first use. Ensure the node is accessible from this server.</p>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3">
+                <button onclick="closeModals()" class="px-5 py-2 rounded-xl hover:bg-slate-900 text-sm font-semibold">Cancel</button>
+                <button onclick="addRedisMirror()" class="btn-primary px-6 py-2 rounded-xl text-sm font-bold">Connect Mirror</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -537,7 +582,29 @@
                         </td>
                     </tr>
                 `).join('');
+                await loadRedisStatus();
             } catch(e) { list.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-red-500">Failed to load status: ${e.message}</td></tr>`; }
+        };
+
+        const loadRedisStatus = async () => {
+            const list = document.getElementById('redisStatusList');
+            list.innerHTML = '<tr><td colspan="4" class="p-4 text-center text-slate-500">Pinging cache nodes...</td></tr>';
+            try {
+                const nodes = await api('/admin/redis');
+                list.innerHTML = nodes.map(node => `
+                    <tr class="hover:bg-slate-900/20">
+                        <td class="p-4 font-bold text-white">${node.name}</td>
+                        <td class="p-4 text-xs"><span class="px-2 py-0.5 rounded ${node.is_mirror ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'}">${node.is_mirror ? 'REPLICA' : 'PRIMARY'}</span></td>
+                        <td class="p-4 font-mono text-[10px] text-slate-500">${node.url}</td>
+                        <td class="p-4">
+                            <span class="flex items-center gap-2 ${node.online ? 'text-green-500' : 'text-red-500'} font-bold text-xs uppercase tracking-widest">
+                                <span class="w-2 h-2 rounded-full ${node.online ? 'bg-green-500 animate-pulse' : 'bg-red-500'}"></span>
+                                ${node.online ? 'Active' : 'Disconnected'}
+                            </span>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch(e) { list.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-red-500">Ping failed: ${e.message}</td></tr>`; }
         };
 
         const addMirror = async () => {
@@ -546,6 +613,17 @@
             if(!name || !url) return alert('Name and URL are required');
             try {
                 await api('/admin/databases', 'POST', { name, url });
+                closeModals();
+                loadDbStatus();
+            } catch(e) { alert(e.message); }
+        };
+
+        const addRedisMirror = async () => {
+            const name = document.getElementById('redisName').value;
+            const url = document.getElementById('redisUrlInput').value;
+            if(!name || !url) return alert('Name and URL are required');
+            try {
+                await api('/admin/redis', 'POST', { name, url });
                 closeModals();
                 loadDbStatus();
             } catch(e) { alert(e.message); }

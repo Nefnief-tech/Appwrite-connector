@@ -121,6 +121,20 @@ pub async fn init_db(database_url: &str) -> Result<Pool<Postgres>> {
     .execute(&pool)
     .await?;
 
+    // Ensure registered_redis table exists
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS registered_redis (
+            id SERIAL PRIMARY KEY,
+            url TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
     // Insert default roles if table is empty
     sqlx::query(
         "INSERT INTO roles_definition (name, permissions) VALUES 
@@ -274,4 +288,23 @@ async fn sync_mirrors(primary: &Pool<Postgres>, mirror: &Pool<Postgres>, data_st
 pub fn init_redis(redis_url: &str) -> Result<Client> {
     let client = Client::open(redis_url)?;
     Ok(client)
+}
+
+pub async fn init_redis_mirrors(pool: &Pool<Postgres>) -> Result<Vec<Client>> {
+    let rows = sqlx::query("SELECT url FROM registered_redis")
+        .fetch_all(pool)
+        .await?;
+
+    let mut mirrors = Vec::new();
+    for row in rows {
+        let url: String = row.get("url");
+        match init_redis(&url) {
+            Ok(client) => {
+                log::info!("Connected to Redis mirror: {}", url);
+                mirrors.push(client);
+            },
+            Err(e) => log::error!("Failed to connect to Redis mirror {}: {}", url, e),
+        }
+    }
+    Ok(mirrors)
 }
