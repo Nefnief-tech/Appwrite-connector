@@ -401,6 +401,73 @@ pub async fn create_document(
     }
 }
 
+#[delete("/v1/databases/{db}/collections/{col}/documents/{id}")]
+pub async fn delete_document(
+    req: HttpRequest,
+    path: web::Path<(String, String, String)>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    state.total_requests.fetch_add(1, Ordering::Relaxed);
+    let (_db_id, _col_id, doc_id) = path.into_inner();
+    
+    let user_id = match get_user_from_session(&req, &state).await {
+        Some(id) => id,
+        None => {
+            if validate_api_key(&req, &state) {
+                req.headers().get("x-appwrite-user-id").and_then(|h| h.to_str().ok()).unwrap_or("admin").to_string()
+            } else {
+                return HttpResponse::Unauthorized().finish();
+            }
+        }
+    };
+
+    let id_uuid = match Uuid::parse_str(&doc_id) {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::BadRequest().body("Invalid document ID format"),
+    };
+
+    // 1. Delete from Primary Postgres
+    let res = sqlx::query("DELETE FROM data_store WHERE id = $1 AND user_id = $2")
+        .bind(id_uuid)
+        .bind(&user_id)
+        .execute(&state.db)
+        .await;
+
+    match res {
+        Ok(r) if r.rows_affected() > 0 => {
+            // 2. Delete from Mirrors
+            {
+                let mirrors = state.mirrors.read().await;
+                for mirror in mirrors.iter() {
+                    let _ = sqlx::query("DELETE FROM data_store WHERE id = $1 AND user_id = $2")
+                        .bind(id_uuid)
+                        .bind(&user_id)
+                        .execute(mirror)
+                        .await;
+                }
+            }
+
+            // 3. Delete from Redis Cache (and mirrors)
+            let redis_key = format!("data:{}:{}", user_id, doc_id);
+            if let Ok(mut conn) = state.redis.get_async_connection().await {
+                let _: () = conn.del(&redis_key).await.unwrap_or_default();
+            }
+            {
+                let redis_mirrors = state.redis_mirrors.read().await;
+                for mirror in redis_mirrors.iter() {
+                    if let Ok(mut conn) = mirror.get_async_connection().await {
+                        let _: () = conn.del(&redis_key).await.unwrap_or_default();
+                    }
+                }
+            }
+
+            HttpResponse::NoContent().finish()
+        },
+        Ok(_) => HttpResponse::NotFound().finish(),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
 // --- Admin & Logic ---
 
 pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {

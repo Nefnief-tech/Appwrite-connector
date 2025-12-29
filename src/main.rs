@@ -72,6 +72,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_document)
             .service(list_documents)
             .service(create_document)
+            .service(delete_document)
             // Admin API
             .service(get_stats)
             .service(list_users)
