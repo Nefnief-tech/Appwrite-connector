@@ -15,19 +15,24 @@ async fn decrypt_smart(state: &AppState, encrypted_data: &str) -> Option<Vec<u8>
     let current_key = state.crypto_key.read().await.clone();
     let crypto = CryptoService::new(current_key);
     if let Ok(dec) = crypto.decrypt(encrypted_data) {
+        log::debug!("Decryption successful with current key");
         return Some(dec);
     }
 
     // 2. Fallback to all keys in keys.json
     if let Ok(ks) = crate::crypto::KeyStore::load() {
-        for key_bytes in ks.get_all_keys() {
-            let fallback_crypto = CryptoService::new(key_bytes);
+        let all_keys = ks.get_all_keys();
+        log::debug!("Current key failed. Trying {} previous keys...", all_keys.len());
+        for (i, key_bytes) in all_keys.iter().enumerate() {
+            let fallback_crypto = CryptoService::new(key_bytes.clone());
             if let Ok(dec) = fallback_crypto.decrypt(encrypted_data) {
+                log::info!("Decryption successful with fallback key #{}", i);
                 return Some(dec);
             }
         }
     }
 
+    log::error!("Decryption failed with all available keys");
     None
 }
 
