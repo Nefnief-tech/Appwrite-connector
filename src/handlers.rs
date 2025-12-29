@@ -130,6 +130,8 @@ pub async fn register_account(
     state: web::Data<AppState>,
 ) -> impl Responder {
     state.total_requests.fetch_add(1, Ordering::Relaxed);
+    log::debug!("Registration request body: {:?}", data);
+    
     let name = data["name"].as_str().unwrap_or("unknown");
     let password = data["password"].as_str().unwrap_or("");
     let email = data["email"].as_str().unwrap_or("");
@@ -142,6 +144,7 @@ pub async fn register_account(
     };
 
     if email.is_empty() || password.is_empty() {
+        log::warn!("Registration failed: email or password empty. Body: {:?}", data);
         return HttpResponse::BadRequest().body("Missing email or password");
     }
 
@@ -182,6 +185,7 @@ pub async fn register_account(
             status: true,
         })
     } else {
+        log::error!("Registration DB error: {:?}", res.err());
         HttpResponse::BadRequest().body("User or email already exists")
     }
 }
@@ -226,14 +230,14 @@ pub async fn create_session(
                         .cookie(actix_web::cookie::Cookie::build("a_session_console", &token)
                             .path("/")
                             .http_only(true)
-                            .same_site(actix_web::cookie::SameSite::None)
-                            .secure(true)
+                            .same_site(actix_web::cookie::SameSite::Lax)
+                            .secure(false)
                             .finish())
                         .cookie(actix_web::cookie::Cookie::build(cookie_name, &token)
                             .path("/")
                             .http_only(true)
-                            .same_site(actix_web::cookie::SameSite::None)
-                            .secure(true)
+                            .same_site(actix_web::cookie::SameSite::Lax)
+                            .secure(false)
                             .finish())
                         .json(AppwriteSession {
                             id: token,
