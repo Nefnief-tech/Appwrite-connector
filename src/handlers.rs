@@ -237,14 +237,14 @@ pub async fn create_session(
                                     .cookie(actix_web::cookie::Cookie::build("a_session_console", &token)
                                         .path("/")
                                         .http_only(true)
-                                        .same_site(actix_web::cookie::SameSite::Lax)
-                                        .secure(false)
+                                        .same_site(actix_web::cookie::SameSite::None)
+                                        .secure(true)
                                         .finish())
                                     .cookie(actix_web::cookie::Cookie::build(cookie_name, &token)
                                         .path("/")
                                         .http_only(true)
-                                        .same_site(actix_web::cookie::SameSite::Lax)
-                                        .secure(false)
+                                        .same_site(actix_web::cookie::SameSite::None)
+                                        .secure(true)
                                         .finish())
                                     .json(AppwriteSession {
                                         id: token,
