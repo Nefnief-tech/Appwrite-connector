@@ -533,6 +533,42 @@ pub async fn delete_document(
     }
 }
 
+#[post("/admin/security/wipe")]
+pub async fn wipe_database(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
+    
+    log::warn!("FULL SYSTEM WIPE REQUESTED");
+
+    // 1. Clear Database Tables
+    let tables = vec!["data_store", "users", "user_profiles", "registered_databases", "registered_redis"];
+    for table in tables {
+        let query = format!("TRUNCATE TABLE {} CASCADE", table);
+        if let Err(e) = sqlx::query(&query).execute(&state.db).await {
+            log::error!("Failed to truncate table {}: {}", table, e);
+        }
+    }
+
+    // 2. Reset default roles
+    let _ = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{\"data:read\", \"data:write\", \"roles:manage\"}'), ('user', '{\"data:read\", \"data:write\"}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(&state.db).await;
+
+    // 3. Clear Redis
+    if let Ok(mut conn) = state.redis.get_async_connection().await {
+        let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap_or_default();
+    }
+    let redis_mirrors = state.redis_mirrors.read().await;
+    for mirror in redis_mirrors.iter() {
+        if let Ok(mut conn) = mirror.get_async_connection().await {
+            let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap_or_default();
+        }
+    }
+
+    log::info!("System wipe completed successfully.");
+    HttpResponse::Ok().json(MessageResponse { message: "System wiped successfully".to_string() })
+}
+
 // --- Admin & Logic ---
 
 pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {

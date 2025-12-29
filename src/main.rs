@@ -93,6 +93,7 @@ async fn main() -> std::io::Result<()> {
             .service(list_redis_mirrors)
             .service(toggle_load_balancer)
             .service(reroll_key)
+            .service(wipe_database)
             .service(fs::Files::new("/console", "./").index_file("test_app.html"))
     })
     .bind((config.host, config.port))?
