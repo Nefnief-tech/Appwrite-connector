@@ -73,6 +73,12 @@ async fn main() -> std::io::Result<()> {
             .service(create_document)
             // Admin API
             .service(get_stats)
+            .service(list_users)
+            .service(list_data)
+            .service(list_roles)
+            .service(update_role_definition)
+            .service(list_databases)
+            .service(add_database)
             .service(get_security_status)
             .service(toggle_under_attack)
             .service(get_db_status)

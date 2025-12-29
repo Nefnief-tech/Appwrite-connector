@@ -398,6 +398,65 @@ fn update_env_file(key: &str, value: &str) -> std::io::Result<()> {
     fs::write(".env", new_content)
 }
 
+#[get("/admin/users")]
+pub async fn list_users(req: HttpRequest, state: web::Data<AppState>) -> impl Responder {
+    if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
+    let rows = sqlx::query_as::<_, UserSummary>("SELECT id, username, created_at FROM users ORDER BY created_at DESC").fetch_all(&state.db).await;
+    match rows {
+        Ok(u) => HttpResponse::Ok().json(u),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+#[get("/data")]
+pub async fn list_data(req: HttpRequest, state: web::Data<AppState>) -> impl Responder {
+    let user_id = match get_user_from_session(&req, &state).await {
+        Some(id) => id,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+    let rows = sqlx::query_as::<_, DataSummary>("SELECT id, created_at FROM data_store WHERE user_id = $1 ORDER BY created_at DESC")
+        .bind(user_id).fetch_all(&state.db).await;
+    match rows {
+        Ok(items) => HttpResponse::Ok().json(items),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+#[get("/roles")]
+pub async fn list_roles(req: HttpRequest, state: web::Data<AppState>) -> impl Responder {
+    if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
+    let rows = sqlx::query("SELECT name, permissions FROM roles_definition").fetch_all(&state.db).await;
+    match rows {
+        Ok(rows) => HttpResponse::Ok().json(rows.iter().map(|r| RoleDefinition { name: r.get("name"), permissions: r.get("permissions") }).collect::<Vec<_>>()),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+#[post("/roles")]
+pub async fn update_role_definition(req: HttpRequest, data: web::Json<RoleDefinition>, state: web::Data<AppState>) -> impl Responder {
+    if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
+    let _ = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions")
+        .bind(&data.name).bind(&data.permissions).execute(&state.db).await;
+    HttpResponse::Ok().json(MessageResponse { message: "Updated".to_string() })
+}
+
+#[get("/admin/databases")]
+pub async fn list_databases(req: HttpRequest, state: web::Data<AppState>) -> impl Responder {
+    if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
+    let rows = sqlx::query("SELECT name, url FROM registered_databases").fetch_all(&state.db).await;
+    match rows {
+        Ok(rows) => HttpResponse::Ok().json(rows.iter().map(|r| DatabaseConfig { name: r.get("name"), url: r.get("url") }).collect::<Vec<_>>()),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+#[post("/admin/databases")]
+pub async fn add_database(req: HttpRequest, data: web::Json<DatabaseConfig>, state: web::Data<AppState>) -> impl Responder {
+    if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
+    let _ = sqlx::query("INSERT INTO registered_databases (name, url) VALUES ($1, $2)").bind(&data.name).bind(&data.url).execute(&state.db).await;
+    HttpResponse::Ok().json(MessageResponse { message: "Added".to_string() })
+}
+
 #[get("/admin/security/status")]
 pub async fn get_security_status(req: HttpRequest, state: web::Data<AppState>) -> impl Responder {
     if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
