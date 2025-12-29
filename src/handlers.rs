@@ -28,22 +28,59 @@ async fn create_local_session(state: &AppState, user_id: &str) -> anyhow::Result
 }
 
 async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<String> {
-    let token_owned = req.headers().get("x-appwrite-jwt")
+    // 1. Try X-Appwrite-JWT
+    let mut token = req.headers().get("x-appwrite-jwt")
         .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            req.cookie("a_session_console") 
-                .map(|c| c.value().to_string())
-        })
-        .or_else(|| {
-            req.headers().get("x-fallback-session")
-                .and_then(|h| h.to_str().ok())
-                .map(|s| s.to_string())
-        })?;
+        .map(|s| s.to_string());
 
-    let mut conn = state.redis.get_async_connection().await.ok()?;
-    let key = format!("session:{}", token_owned);
-    conn.get::<_, String>(key).await.ok()
+    // 2. Try cookies (Standard Console and Project-specific)
+    if token.is_none() {
+        token = req.cookie("a_session_console")
+            .map(|c| c.value().to_string());
+    }
+    
+    if token.is_none() {
+        // Appwrite SDKs use a_session_<projectId>
+        if let Some(project_id) = req.headers().get("x-appwrite-project").and_then(|h| h.to_str().ok()) {
+            let cookie_name = format!("a_session_{}", project_id);
+            token = req.cookie(&cookie_name).map(|c| c.value().to_string());
+        }
+    }
+
+    // 3. Try Fallback header
+    if token.is_none() {
+        token = req.headers().get("x-fallback-session")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+    }
+
+    let token_val = match token {
+        Some(t) => t,
+        None => {
+            log::debug!("No session token found in headers or cookies");
+            return None;
+        }
+    };
+
+    let mut conn = match state.redis.get_async_connection().await {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Redis connection error in session check: {}", e);
+            return None;
+        }
+    };
+
+    let key = format!("session:{}", token_val);
+    match conn.get::<_, String>(key).await {
+        Ok(user_id) => {
+            log::debug!("Session verified for user: {}", user_id);
+            Some(user_id)
+        },
+        Err(_) => {
+            log::warn!("Session token not found in Redis: {}", token_val);
+            None
+        }
+    }
 }
 
 // --- Appwrite API Implementation ---
@@ -145,7 +182,7 @@ pub async fn register_account(
 
 #[post("/v1/account/sessions/email")]
 pub async fn create_session(
-    _req: HttpRequest,
+    req: HttpRequest,
     data: web::Json<serde_json::Value>,
     state: web::Data<AppState>,
 ) -> impl Responder {
@@ -169,10 +206,28 @@ pub async fn create_session(
                     let now = Utc::now();
                     let expire = now + chrono::Duration::seconds(state.session_duration as i64);
                     
+                    let project_id = req.headers().get("x-appwrite-project")
+                        .and_then(|h| h.to_str().ok())
+                        .unwrap_or("console");
+
+                    let cookie_name = if project_id == "console" {
+                        "a_session_console".to_string()
+                    } else {
+                        format!("a_session_{}", project_id)
+                    };
+
                     return HttpResponse::Created()
                         .cookie(actix_web::cookie::Cookie::build("a_session_console", &token)
                             .path("/")
                             .http_only(true)
+                            .same_site(actix_web::cookie::SameSite::None)
+                            .secure(true)
+                            .finish())
+                        .cookie(actix_web::cookie::Cookie::build(cookie_name, &token)
+                            .path("/")
+                            .http_only(true)
+                            .same_site(actix_web::cookie::SameSite::None)
+                            .secure(true)
                             .finish())
                         .json(AppwriteSession {
                             id: token,
