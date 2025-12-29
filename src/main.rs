@@ -13,7 +13,7 @@ use handlers::{
     store_data, get_data, list_data, get_profile, update_profile, 
     list_roles, update_role_definition, login, register, 
     get_stats, list_users, add_database, list_databases, get_db_status,
-    reroll_key, reroll_key_logic
+    reroll_key, reroll_key_logic, toggle_under_attack
 };
 use dotenv::dotenv;
 use std::sync::Arc;
@@ -32,14 +32,24 @@ async fn main() -> std::io::Result<()> {
     let mirrors = init_mirrors(&pool).await.expect("Failed to initialize mirrors");
     log::info!("Loaded {} database mirrors from registry", mirrors.len());
     let redis_client = init_redis(&config.redis_url).expect("Failed to connect to Redis");
+    let mut redis_mirrors = Vec::new();
+    for url in &config.redis_mirrors {
+        if let Ok(client) = init_redis(url) {
+            redis_mirrors.push(client);
+        }
+    }
 
     let state = AppState {
         db: pool,
         mirrors: Arc::new(RwLock::new(mirrors)),
         redis: redis_client,
+        redis_mirrors: Arc::new(RwLock::new(redis_mirrors)),
         crypto_key: Arc::new(RwLock::new(config.encryption_key.clone())),
         appwrite_api_key: config.appwrite_api_key.clone(),
         appwrite_endpoint: config.appwrite_endpoint.clone(),
+        under_attack: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        load_balancer_mode: Arc::new(std::sync::atomic::AtomicBool::new(config.load_balancer_mode)),
+        redis_read_index: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
 
     // Background Task: Daily Key Rotation
@@ -87,6 +97,7 @@ async fn main() -> std::io::Result<()> {
             .service(add_database)
             .service(list_databases)
             .service(get_db_status)
+            .service(toggle_under_attack)
             .service(reroll_key)
             .service(fs::Files::new("/", "./").index_file("test_app.html"))
     })

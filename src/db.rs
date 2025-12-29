@@ -4,15 +4,20 @@ use redis::Client;
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Pool<Postgres>, // Primary DB
     pub mirrors: Arc<RwLock<Vec<Pool<Postgres>>>>, // Mirror DBs
     pub redis: Client,
+    pub redis_mirrors: Arc<RwLock<Vec<Client>>>,
     pub crypto_key: Arc<RwLock<Vec<u8>>>,
     pub appwrite_api_key: String,
     pub appwrite_endpoint: String,
+    pub under_attack: Arc<AtomicBool>,
+    pub load_balancer_mode: Arc<AtomicBool>,
+    pub redis_read_index: Arc<AtomicUsize>,
 }
 
 pub async fn init_db(database_url: &str) -> Result<Pool<Postgres>> {

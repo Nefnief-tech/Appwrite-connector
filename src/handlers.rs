@@ -6,6 +6,31 @@ use uuid::Uuid;
 use redis::AsyncCommands;
 use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
+use std::sync::atomic::Ordering;
+
+#[post("/admin/security/attack")]
+pub async fn toggle_under_attack(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let is_auth = validate_api_key(&req, &state) || verify_appwrite_session(&req, &state).await.is_some();
+    if !is_auth { return HttpResponse::Unauthorized().body("Unauthorized"); }
+
+    let current = state.under_attack.fetch_xor(true, Ordering::SeqCst);
+    let new_state = !current;
+
+    if new_state {
+        log::warn!("UNDER ATTACK MODE ACTIVATED - Triggering immediate key reroll");
+        if let Err(e) = reroll_key_logic(state.get_ref()).await {
+             log::error!("Emergency key reroll failed: {}", e);
+             return HttpResponse::InternalServerError().body(format!("Attack mode failed to reroll: {}", e));
+        }
+    }
+
+    HttpResponse::Ok().json(MessageResponse { 
+        message: format!("Under attack mode: {}", if new_state { "ENABLED" } else { "DISABLED" }) 
+    })
+}
 
 #[post("/admin/security/reroll")]
 pub async fn reroll_key(
@@ -121,6 +146,14 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
     // 9. Flush Redis (Old encrypted data is invalid)
     if let Ok(mut conn) = state.redis.get_async_connection().await {
         let _: Result<(), _> = redis::cmd("FLUSHDB").query_async(&mut conn).await;
+    }
+    {
+        let redis_mirrors = state.redis_mirrors.read().await;
+        for mirror in redis_mirrors.iter() {
+            if let Ok(mut conn) = mirror.get_async_connection().await {
+                let _: Result<(), _> = redis::cmd("FLUSHDB").query_async(&mut conn).await;
+            }
+        }
     }
 
     Ok(())
@@ -438,15 +471,21 @@ pub async fn store_data(
     }
 
     // Store in Redis (Key now includes user_id for safety)
-    let mut redis_conn = match state.redis.get_async_connection().await {
-        Ok(conn) => conn,
-        Err(e) => return HttpResponse::InternalServerError().body(format!("Redis connection error: {}", e)),
-    };
-
     let redis_key = format!("data:{}:{}", user_id, id);
-    let redis_res: Result<(), _> = redis_conn.set_ex(redis_key, &encrypted_data, 3600).await;
-    if let Err(e) = redis_res {
-         eprintln!("Failed to cache in Redis: {}", e);
+    
+    // Primary Redis
+    if let Ok(mut conn) = state.redis.get_async_connection().await {
+        let _: Result<(), _> = conn.set_ex(&redis_key, &encrypted_data, 3600).await;
+    }
+
+    // Mirror Redis
+    {
+        let mirrors = state.redis_mirrors.read().await;
+        for mirror in mirrors.iter() {
+            if let Ok(mut conn) = mirror.get_async_connection().await {
+                let _: Result<(), _> = conn.set_ex(&redis_key, &encrypted_data, 3600).await;
+            }
+        }
     }
 
     HttpResponse::Ok().json(ApiResponse {
@@ -729,10 +768,35 @@ pub async fn get_data(
 
     // Try Redis first (Scoped by user_id)
     let redis_key = format!("data:{}:{}", user_id, id);
-    if let Ok(mut conn) = state.redis.get_async_connection().await {
-        let res: Result<String, _> = conn.get(&redis_key).await;
-        if let Ok(val) = res {
-            return decrypt_and_respond(val, crypto);
+    
+    let lb_enabled = state.load_balancer_mode.load(Ordering::Relaxed);
+    
+    if lb_enabled {
+        let mirrors = state.redis_mirrors.read().await;
+        let total_count = mirrors.len() + 1; // +1 for primary
+        let idx = state.redis_read_index.fetch_add(1, Ordering::SeqCst) % total_count;
+        
+        if idx == 0 {
+            if let Ok(mut conn) = state.redis.get_async_connection().await {
+                if let Ok(val) = conn.get::<_, String>(&redis_key).await {
+                    return decrypt_and_respond(val, crypto);
+                }
+            }
+        } else {
+            let mirror = &mirrors[idx - 1];
+            if let Ok(mut conn) = mirror.get_async_connection().await {
+                if let Ok(val) = conn.get::<_, String>(&redis_key).await {
+                    return decrypt_and_respond(val, crypto);
+                }
+            }
+        }
+    } else {
+        // Fallback to primary-only read if LB is disabled
+        if let Ok(mut conn) = state.redis.get_async_connection().await {
+            let res: Result<String, _> = conn.get(&redis_key).await;
+            if let Ok(val) = res {
+                return decrypt_and_respond(val, crypto);
+            }
         }
     }
 
@@ -747,9 +811,17 @@ pub async fn get_data(
         Ok(Some(r)) => {
             let content: String = r.get("encrypted_content");
             
-            // Cache back to Redis
+            // Cache back to all Redis nodes
             if let Ok(mut conn) = state.redis.get_async_connection().await {
                 let _: Result<(), _> = conn.set_ex(&redis_key, &content, 3600).await;
+            }
+            {
+                let mirrors = state.redis_mirrors.read().await;
+                for mirror in mirrors.iter() {
+                    if let Ok(mut conn) = mirror.get_async_connection().await {
+                        let _: Result<(), _> = conn.set_ex(&redis_key, &content, 3600).await;
+                    }
+                }
             }
 
             decrypt_and_respond(content, crypto)
