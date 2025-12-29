@@ -100,8 +100,9 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
     let new_crypto = CryptoService::new(new_key.clone());
 
     // 3. Re-encrypt data_store
+    log::info!("Re-encrypting {} data_store records...", data_rows.len());
     let mut updated_records = Vec::new();
-    for row in data_rows {
+    for row in &data_rows {
         let id: Uuid = row.get("id");
         let user_id: String = row.get("user_id");
         let old_encrypted: String = row.get("encrypted_content");
@@ -112,10 +113,12 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
             }
         }
     }
+    log::info!("Re-encrypted {}/{} data_store records successfully", updated_records.len(), data_rows.len());
 
     // 4. Re-encrypt users
+    log::info!("Re-encrypting {} user password hashes...", user_rows.len());
     let mut updated_users = Vec::new();
-    for row in user_rows {
+    for row in &user_rows {
         let id: String = row.get("id");
         let old_hash_enc: String = row.get("password_hash");
         
@@ -125,11 +128,12 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
             }
         }
     }
+    log::info!("Re-encrypted {}/{} user password hashes successfully", updated_users.len(), user_rows.len());
 
     // 5. Update mirrors first
     {
         let mirrors = state.mirrors.read().await;
-        log::info!("Rerolling keys: updating {} mirrors", mirrors.len());
+        log::info!("Updating {} mirrors with new encrypted data...", mirrors.len());
         for mirror in mirrors.iter() {
             // Update data_store on mirror
             for (id, _user_id, content) in &updated_records {
@@ -155,6 +159,7 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
     }
 
     // 6. Update primary
+    log::info!("Updating primary database with new encrypted data...");
     for (id, _user_id, content) in &updated_records {
         sqlx::query("UPDATE data_store SET encrypted_content = $1 WHERE id = $2")
             .bind(content)
@@ -169,6 +174,7 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
             .execute(&state.db)
             .await?;
     }
+    log::info!("Primary database update complete.");
 
     // 7. Update the key in AppState (we already hold the lock)
     *key_lock = new_key.clone();
