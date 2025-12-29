@@ -526,31 +526,50 @@ pub async fn delete_document(
 // --- Admin & Logic ---
 
 pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
+    log::info!("Starting master key reroll process...");
     let mut key_lock = state.crypto_key.write().await;
     let old_key = key_lock.clone();
     let old_crypto = CryptoService::new(old_key);
     
-    let data_rows = sqlx::query("SELECT id, user_id, encrypted_content FROM data_store").fetch_all(&state.db).await?;
-    let user_rows = sqlx::query("SELECT id, password_hash FROM users").fetch_all(&state.db).await?;
+    let data_rows = sqlx::query("SELECT id, database_id, collection_id, user_id, encrypted_content FROM data_store").fetch_all(&state.db).await?;
+    let user_rows = sqlx::query("SELECT id, username, email, password_hash FROM users").fetch_all(&state.db).await?;
 
     let new_key = CryptoService::generate_key();
     let new_crypto = CryptoService::new(new_key.clone());
 
+    log::info!("Re-encrypting {} data_store records...", data_rows.len());
     for row in &data_rows {
         let id: Uuid = row.get("id");
         let old_enc: String = row.get("encrypted_content");
         if let Ok(dec) = old_crypto.decrypt(&old_enc) {
             let new_enc = new_crypto.encrypt(&dec).unwrap();
-            sqlx::query("UPDATE data_store SET encrypted_content = $1 WHERE id = $2").bind(new_enc).bind(id).execute(&state.db).await?;
+            
+            // Update Primary
+            sqlx::query("UPDATE data_store SET encrypted_content = $1 WHERE id = $2").bind(&new_enc).bind(id).execute(&state.db).await?;
+            
+            // Update Mirrors
+            let mirrors = state.mirrors.read().await;
+            for mirror in mirrors.iter() {
+                let _ = sqlx::query("UPDATE data_store SET encrypted_content = $1 WHERE id = $2").bind(&new_enc).bind(id).execute(mirror).await;
+            }
         }
     }
 
+    log::info!("Re-encrypting {} user password hashes...", user_rows.len());
     for row in &user_rows {
         let id: String = row.get("id");
         let old_enc: String = row.get("password_hash");
         if let Ok(dec) = old_crypto.decrypt(&old_enc) {
             let new_enc = new_crypto.encrypt(&dec).unwrap();
-            sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2").bind(new_enc).bind(id).execute(&state.db).await?;
+            
+            // Update Primary
+            sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2").bind(&new_enc).bind(&id).execute(&state.db).await?;
+            
+            // Update Mirrors
+            let mirrors = state.mirrors.read().await;
+            for mirror in mirrors.iter() {
+                let _ = sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2").bind(&new_enc).bind(&id).execute(mirror).await;
+            }
         }
     }
 
@@ -570,6 +589,20 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
     }
 
     let _ = update_env_file("ENCRYPTION_KEY", &new_hex);
+
+    // Flush Redis on all nodes
+    log::info!("Invalidating Redis caches...");
+    if let Ok(mut conn) = state.redis.get_async_connection().await {
+        let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap_or_default();
+    }
+    let redis_mirrors = state.redis_mirrors.read().await;
+    for mirror in redis_mirrors.iter() {
+        if let Ok(mut conn) = mirror.get_async_connection().await {
+            let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap_or_default();
+        }
+    }
+
+    log::info!("Master key reroll completed successfully.");
     Ok(())
 }
 
