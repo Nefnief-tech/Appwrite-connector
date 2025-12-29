@@ -12,7 +12,13 @@ use chrono::Utc;
 
 async fn create_local_session(state: &AppState, user_id: &str) -> anyhow::Result<String> {
     let session_token = Uuid::new_v4().to_string();
-    let mut conn = state.redis.get_async_connection().await?;
+    let mut conn = match state.redis.get_async_connection().await {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Primary Redis connection failed for session creation: {}", e);
+            return Err(anyhow::anyhow!("Redis primary down"));
+        }
+    };
     let key = format!("session:{}", session_token);
     let _: () = conn.set_ex(&key, user_id, state.session_duration).await?;
     
@@ -590,15 +596,22 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
 
     let _ = update_env_file("ENCRYPTION_KEY", &new_hex);
 
-    // Flush Redis on all nodes
-    log::info!("Invalidating Redis caches...");
+    // Selective Cache Clearing (Delete encrypted data, keep sessions)
+    log::info!("Invalidating encrypted data in Redis caches...");
+    let clear_script = "for i, name in ipairs(redis.call('KEYS', 'data:*')) do redis.call('DEL', name) end";
+    
     if let Ok(mut conn) = state.redis.get_async_connection().await {
-        let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap_or_default();
+        let _: Result<(), _> = redis::cmd("EVAL").arg(clear_script).arg("0").query_async(&mut conn).await;
+    } else {
+        log::error!("Failed to connect to primary Redis for cache invalidation");
     }
+
     let redis_mirrors = state.redis_mirrors.read().await;
     for mirror in redis_mirrors.iter() {
         if let Ok(mut conn) = mirror.get_async_connection().await {
-            let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap_or_default();
+            let _: Result<(), _> = redis::cmd("EVAL").arg(clear_script).arg("0").query_async(&mut conn).await;
+        } else {
+            log::error!("Failed to connect to a Redis mirror for cache invalidation");
         }
     }
 
