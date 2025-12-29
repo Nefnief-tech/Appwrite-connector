@@ -9,11 +9,10 @@ pub struct Config {
     pub redis_mirrors: Vec<String>,
     pub encryption_key: Vec<u8>,
     pub appwrite_api_key: String,
-    pub appwrite_endpoint: String,
-    pub appwrite_project_id: String,
     pub host: String,
     pub port: u16,
     pub load_balancer_mode: bool,
+    pub session_duration: u64, // In seconds
 }
 
 impl Config {
@@ -31,8 +30,6 @@ impl Config {
         let key_hex = env::var("ENCRYPTION_KEY").expect("ENCRYPTION_KEY must be set");
         let encryption_key = hex::decode(key_hex).expect("ENCRYPTION_KEY must be valid hex");
         let appwrite_api_key = env::var("APPWRITE_API_KEY").unwrap_or_else(|_| "secret_key".to_string());
-        let appwrite_endpoint = env::var("APPWRITE_ENDPOINT").unwrap_or_else(|_| "https://cloud.appwrite.io/v1".to_string());
-        let appwrite_project_id = env::var("APPWRITE_PROJECT_ID").unwrap_or_else(|_| "YOUR_PROJECT_ID".to_string());
         let host = env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let port = env::var("PORT")
             .unwrap_or_else(|_| "8080".to_string())
@@ -42,6 +39,10 @@ impl Config {
             .unwrap_or_else(|_| "false".to_string())
             .parse()
             .unwrap_or(false);
+        let session_duration = env::var("SESSION_DURATION")
+            .unwrap_or_else(|_| "604800".to_string()) // 7 days
+            .parse()
+            .unwrap_or(604800);
 
         if encryption_key.len() != 32 {
             panic!("ENCRYPTION_KEY must be 32 bytes (64 hex characters) for AES-256");
@@ -53,11 +54,10 @@ impl Config {
             redis_mirrors,
             encryption_key,
             appwrite_api_key,
-            appwrite_endpoint,
-            appwrite_project_id,
             host,
             port,
             load_balancer_mode,
+            session_duration,
         })
     }
 }

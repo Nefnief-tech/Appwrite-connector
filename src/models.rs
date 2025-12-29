@@ -80,6 +80,47 @@ pub struct DatabaseConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AppwriteUser {
+    #[serde(rename = "$id")]
+    pub id: String,
+    #[serde(rename = "$createdAt")]
+    pub created_at: String,
+    #[serde(rename = "$updatedAt")]
+    pub updated_at: String,
+    pub name: String,
+    pub email: String,
+    pub status: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AppwriteSession {
+    #[serde(rename = "$id")]
+    pub id: String,
+    #[serde(rename = "$createdAt")]
+    pub created_at: String,
+    #[serde(rename = "userId")]
+    pub user_id: String,
+    pub expire: String,
+    pub provider: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AppwriteDocument {
+    #[serde(rename = "$id")]
+    pub id: String,
+    #[serde(rename = "$collectionId")]
+    pub collection_id: String,
+    #[serde(rename = "$databaseId")]
+    pub database_id: String,
+    #[serde(rename = "$createdAt")]
+    pub created_at: String,
+    #[serde(rename = "$updatedAt")]
+    pub updated_at: String,
+    #[serde(flatten)]
+    pub data: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DatabaseStatus {
     pub name: String,
     pub url: String,
