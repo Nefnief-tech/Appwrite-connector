@@ -453,6 +453,23 @@
                 <button onclick="addRedisMirror()" class="btn-primary px-6 py-2 rounded-xl text-sm font-bold">Connect Mirror</button>
             </div>
         </div>
+        <!-- Confirmation Modals -->
+        <div id="confirmRerollModal" class="modal-box card-glass bg-slate-950 w-full max-w-md p-8 hidden flex flex-col gap-6 shadow-2xl">
+            <h3 class="text-xl font-bold text-white">Confirm Key Rotation</h3>
+            <p class="text-sm text-slate-400">DANGER: This will re-encrypt your entire database. This operation may take some time and might cause temporary read-only state.</p>
+            <div class="flex justify-end gap-3">
+                <button onclick="closeModals()" class="px-5 py-2 rounded-xl hover:bg-slate-900 text-sm font-semibold">Cancel</button>
+                <button onclick="executeReroll()" class="bg-white text-black px-6 py-2 rounded-xl text-sm font-bold hover:bg-slate-200">Start Rotation</button>
+            </div>
+        </div>
+        <div id="confirmAttackModal" class="modal-box card-glass bg-slate-950 w-full max-w-md p-8 hidden flex flex-col gap-6 shadow-2xl border-red-500/30">
+            <h3 class="text-xl font-bold text-white text-red-500">Emergency Protocol</h3>
+            <p class="text-sm text-slate-400">Activating Under Attack Mode will immediately rotate all encryption keys and invalidate all current sessions. Use only in case of an active breach.</p>
+            <div class="flex justify-end gap-3">
+                <button onclick="closeModals()" class="px-5 py-2 rounded-xl hover:bg-slate-900 text-sm font-semibold">Cancel</button>
+                <button onclick="executeAttackMode()" class="bg-red-600 text-white px-6 py-2 rounded-xl text-sm font-bold hover:bg-red-700">Activate Protocol</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -532,9 +549,13 @@
             } catch(e) { console.error('Security Status Load Failed:', e); }
         };
 
-        const toggleAttackMode = async () => {
+        const toggleAttackMode = () => {
             console.log('toggleAttackMode triggered');
-            if(!confirm("Are you sure? This will trigger an emergency re-encryption of all data.")) return;
+            openModal('confirmAttackModal');
+        };
+
+        const executeAttackMode = async () => {
+            closeModals();
             const btn = document.getElementById('attackBtn');
             const original = btn ? btn.innerHTML : 'Toggle Under Attack Mode';
             if (btn) {
@@ -561,9 +582,13 @@
             } catch(e) { alert('Load Balancer Error: ' + e.message); }
         };
 
-        const triggerReroll = async () => {
+        const triggerReroll = () => {
             console.log('triggerReroll triggered');
-            if(!confirm("DANGER: This will re-encrypt your entire database. Are you sure you want to rotate the master key?")) return;
+            openModal('confirmRerollModal');
+        };
+
+        const executeReroll = async () => {
+            closeModals();
             const btn = document.getElementById('rerollBtn');
             const originalContent = btn ? btn.innerHTML : 'Force Key Reroll Now';
             if (btn) {
@@ -573,6 +598,7 @@
             try {
                 await api('/admin/security/reroll', 'POST');
                 alert('Success: Encryption key rotated and data re-encrypted across all nodes.');
+                await loadSecurityStatus();
             } catch(e) { alert('Critical Error: ' + e.message); }
             finally {
                 if (btn) {
