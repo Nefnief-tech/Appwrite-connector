@@ -62,7 +62,7 @@ pub async fn get_account(
         None => return HttpResponse::Unauthorized().finish(),
     };
 
-    let row = sqlx::query("SELECT id, username, created_at FROM users WHERE id = $1")
+    let row = sqlx::query("SELECT id, username, email, created_at FROM users WHERE id = $1")
         .bind(&user_id)
         .fetch_optional(&state.db)
         .await;
@@ -75,7 +75,7 @@ pub async fn get_account(
                 created_at: created.to_rfc3339(),
                 updated_at: created.to_rfc3339(),
                 name: r.get("username"),
-                email: format!("{}@local.system", r.get::<String, _>("username")),
+                email: r.get("email"),
                 status: true,
             })
         },
@@ -90,9 +90,20 @@ pub async fn register_account(
     state: web::Data<AppState>,
 ) -> impl Responder {
     state.total_requests.fetch_add(1, Ordering::Relaxed);
-    let username = data["name"].as_str().unwrap_or_else(|| data["email"].as_str().unwrap_or("unknown"));
+    let name = data["name"].as_str().unwrap_or("unknown");
     let password = data["password"].as_str().unwrap_or("");
     let email = data["email"].as_str().unwrap_or("");
+    let user_id_input = data["userId"].as_str().unwrap_or("unique()");
+    
+    let user_id = if user_id_input == "unique()" {
+        Uuid::new_v4().to_string()
+    } else {
+        user_id_input.to_string()
+    };
+
+    if email.is_empty() || password.is_empty() {
+        return HttpResponse::BadRequest().body("Missing email or password");
+    }
 
     let hashed_password = match bcrypt::hash(password, bcrypt::DEFAULT_COST) {
         Ok(h) => h,
@@ -101,11 +112,11 @@ pub async fn register_account(
 
     let crypto = CryptoService::new(state.crypto_key.read().await.clone());
     let encrypted_hash = crypto.encrypt(hashed_password.as_bytes()).unwrap();
-    let user_id = Uuid::new_v4().to_string();
 
-    let res = sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, $3)")
+    let res = sqlx::query("INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)")
         .bind(&user_id)
-        .bind(username)
+        .bind(name)
+        .bind(email)
         .bind(&encrypted_hash)
         .execute(&state.db)
         .await;
@@ -113,9 +124,10 @@ pub async fn register_account(
     if res.is_ok() {
         let mirrors = state.mirrors.read().await;
         for mirror in mirrors.iter() {
-            let _ = sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, $3)")
+            let _ = sqlx::query("INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)")
                 .bind(&user_id)
-                .bind(username)
+                .bind(name)
+                .bind(email)
                 .bind(&encrypted_hash)
                 .execute(mirror).await;
         }
@@ -125,12 +137,12 @@ pub async fn register_account(
             id: user_id,
             created_at: now.clone(),
             updated_at: now,
-            name: username.to_string(),
+            name: name.to_string(),
             email: email.to_string(),
             status: true,
         })
     } else {
-        HttpResponse::BadRequest().body("User already exists")
+        HttpResponse::BadRequest().body("User or email already exists")
     }
 }
 
@@ -144,10 +156,8 @@ pub async fn create_session(
     let email = data["email"].as_str().unwrap_or("");
     let password = data["password"].as_str().unwrap_or("");
     
-    let username = email.split('@').next().unwrap_or(email);
-
-    let row = sqlx::query("SELECT id, password_hash FROM users WHERE username = $1")
-        .bind(username)
+    let row = sqlx::query("SELECT id, password_hash FROM users WHERE email = $1")
+        .bind(email)
         .fetch_optional(&state.db)
         .await;
 
@@ -293,18 +303,17 @@ fn update_env_file(key: &str, value: &str) -> std::io::Result<()> {
     let content = fs::read_to_string(".env").unwrap_or_default();
     let mut new_content = String::new();
     let mut found = false;
-    let prefix = format!("{} =", key);
+    let prefix = format!("{}=", key);
     for line in content.lines() {
         if line.starts_with(&prefix) {
-            new_content.push_str(&format!("{} = {}
-", key, value));
+            new_content.push_str(&format!("{}={}\n", key, value));
             found = true;
         } else {
             new_content.push_str(line);
             new_content.push_str("\n");
         }
     }
-    if !found { new_content.push_str(&format!("{} = {}\n", key, value)); }
+    if !found { new_content.push_str(&format!("{}={}\n", key, value)); }
     fs::write(".env", new_content)
 }
 

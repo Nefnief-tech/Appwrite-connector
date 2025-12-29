@@ -99,10 +99,28 @@ pub async fn init_db(database_url: &str) -> Result<Pool<Postgres>> {
         r#"
         CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
+            username TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
+    // Migration: Add email if missing
+    sqlx::query(
+        r#"
+        DO $$ 
+        BEGIN 
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='email') THEN
+                ALTER TABLE users ADD COLUMN email TEXT UNIQUE;
+                -- Update existing users to have a placeholder email based on username
+                UPDATE users SET email = username || '@local.system' WHERE email IS NULL;
+                ALTER TABLE users ALTER COLUMN email SET NOT NULL;
+            END IF;
+        END $$;
         "#
     )
     .execute(&pool)
