@@ -32,6 +32,39 @@ pub async fn toggle_under_attack(
     })
 }
 
+#[get("/admin/security/status")]
+pub async fn get_security_status(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let is_auth = validate_api_key(&req, &state) || verify_appwrite_session(&req, &state).await.is_some();
+    if !is_auth { return HttpResponse::Unauthorized().body("Unauthorized"); }
+
+    let status = crate::models::SecurityStatus {
+        under_attack: state.under_attack.load(Ordering::SeqCst),
+        load_balancer_mode: state.load_balancer_mode.load(Ordering::SeqCst),
+        redis_mirrors_count: state.redis_mirrors.read().await.len(),
+    };
+
+    HttpResponse::Ok().json(status)
+}
+
+#[post("/admin/security/load-balancer")]
+pub async fn toggle_load_balancer(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let is_auth = validate_api_key(&req, &state) || verify_appwrite_session(&req, &state).await.is_some();
+    if !is_auth { return HttpResponse::Unauthorized().body("Unauthorized"); }
+
+    let current = state.load_balancer_mode.fetch_xor(true, Ordering::SeqCst);
+    let new_state = !current;
+
+    HttpResponse::Ok().json(MessageResponse { 
+        message: format!("Load balancer mode: {}", if new_state { "ENABLED" } else { "DISABLED" }) 
+    })
+}
+
 #[post("/admin/security/reroll")]
 pub async fn reroll_key(
     req: HttpRequest,

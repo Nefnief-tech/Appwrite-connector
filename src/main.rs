@@ -13,7 +13,8 @@ use handlers::{
     store_data, get_data, list_data, get_profile, update_profile, 
     list_roles, update_role_definition, login, register, 
     get_stats, list_users, add_database, list_databases, get_db_status,
-    reroll_key, reroll_key_logic, toggle_under_attack
+    reroll_key, reroll_key_logic, toggle_under_attack, get_security_status,
+    toggle_load_balancer
 };
 use dotenv::dotenv;
 use std::sync::Arc;
@@ -98,6 +99,8 @@ async fn main() -> std::io::Result<()> {
             .service(list_databases)
             .service(get_db_status)
             .service(toggle_under_attack)
+            .service(get_security_status)
+            .service(toggle_load_balancer)
             .service(reroll_key)
             .service(fs::Files::new("/", "./").index_file("test_app.html"))
     })

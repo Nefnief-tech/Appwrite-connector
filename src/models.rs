@@ -83,3 +83,10 @@ pub struct DatabaseStatus {
     pub online: bool,
     pub is_mirror: bool,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SecurityStatus {
+    pub under_attack: bool,
+    pub load_balancer_mode: bool,
+    pub redis_mirrors_count: usize,
+}
