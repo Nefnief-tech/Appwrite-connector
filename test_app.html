@@ -527,15 +527,17 @@
         const handleAuth = async () => {
             const username = document.getElementById('authUsername').value;
             const password = document.getElementById('authPassword').value;
+            // Ensure email doesn't have double suffix
+            const email = username.includes('@') ? username : `${username}@local.system`;
             try {
                 if (isReg) {
                     // Registration uses /v1/account
-                    await api('/v1/account', 'POST', { name: username, email: `${username}@local.system`, password, userId: 'unique()' });
+                    await api('/v1/account', 'POST', { name: username, email: email, password, userId: 'unique()' });
                     alert('Registration successful. Please sign in.');
                     toggleAuthMode();
                 } else {
                     // Login uses /v1/account/sessions/email
-                    session = await api('/v1/account/sessions/email', 'POST', { email: `${username}@local.system`, password });
+                    session = await api('/v1/account/sessions/email', 'POST', { email: email, password });
                     localStorage.setItem('connector_session', JSON.stringify(session));
                     initApp();
                 }

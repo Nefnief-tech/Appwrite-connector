@@ -15,8 +15,9 @@ async fn create_local_session(state: &AppState, user_id: &str) -> anyhow::Result
     let mut conn = match state.redis.get_async_connection().await {
         Ok(c) => c,
         Err(e) => {
-            log::error!("Primary Redis connection failed for session creation: {}", e);
-            return Err(anyhow::anyhow!("Redis primary down"));
+            let info = state.redis.get_connection_info();
+            log::error!("Primary Redis connection failed for session creation to {}: {}", info.addr, e);
+            return Err(anyhow::anyhow!("Redis primary down or auth failed"));
         }
     };
     let key = format!("session:{}", session_token);
