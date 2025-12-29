@@ -412,7 +412,13 @@ pub async fn list_users(req: HttpRequest, state: web::Data<AppState>) -> impl Re
 pub async fn list_data(req: HttpRequest, state: web::Data<AppState>) -> impl Responder {
     let user_id = match get_user_from_session(&req, &state).await {
         Some(id) => id,
-        None => return HttpResponse::Unauthorized().finish(),
+        None => {
+            if validate_api_key(&req, &state) {
+                req.headers().get("x-appwrite-user-id").and_then(|h| h.to_str().ok()).unwrap_or("admin").to_string()
+            } else {
+                return HttpResponse::Unauthorized().finish();
+            }
+        }
     };
     let rows = sqlx::query_as::<_, DataSummary>("SELECT id, created_at FROM data_store WHERE user_id = $1 ORDER BY created_at DESC")
         .bind(user_id).fetch_all(&state.db).await;
@@ -424,7 +430,9 @@ pub async fn list_data(req: HttpRequest, state: web::Data<AppState>) -> impl Res
 
 #[get("/roles")]
 pub async fn list_roles(req: HttpRequest, state: web::Data<AppState>) -> impl Responder {
-    if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
+    if !validate_api_key(&req, &state) && get_user_from_session(&req, &state).await.is_none() { 
+        return HttpResponse::Unauthorized().finish(); 
+    }
     let rows = sqlx::query("SELECT name, permissions FROM roles_definition").fetch_all(&state.db).await;
     match rows {
         Ok(rows) => HttpResponse::Ok().json(rows.iter().map(|r| RoleDefinition { name: r.get("name"), permissions: r.get("permissions") }).collect::<Vec<_>>()),
