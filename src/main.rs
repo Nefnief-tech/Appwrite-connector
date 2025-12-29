@@ -55,6 +55,7 @@ async fn main() -> std::io::Result<()> {
         under_attack: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         load_balancer_mode: Arc::new(std::sync::atomic::AtomicBool::new(config.load_balancer_mode)),
         redis_read_index: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        total_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
 
     // Background Task: Daily Key Rotation

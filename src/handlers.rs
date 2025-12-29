@@ -442,6 +442,7 @@ pub async fn add_database(
 }
 
 fn validate_api_key(req: &HttpRequest, state: &AppState) -> bool {
+    state.total_requests.fetch_add(1, Ordering::Relaxed);
     match req.headers().get("x-appwrite-key") {
         Some(val) => val.to_str().unwrap_or("") == state.appwrite_api_key,
         None => false,
@@ -482,6 +483,9 @@ pub async fn get_stats(
         total_records: records,
         total_users: users,
         total_roles: roles,
+        total_requests: state.total_requests.load(Ordering::Relaxed),
+        under_attack: state.under_attack.load(Ordering::Relaxed),
+        load_balancer_mode: state.load_balancer_mode.load(Ordering::Relaxed),
     })
 }
 
@@ -509,6 +513,7 @@ pub async fn store_data(
     data: web::Json<AppwriteRequest>,
     state: web::Data<AppState>,
 ) -> impl Responder {
+    state.total_requests.fetch_add(1, Ordering::Relaxed);
     let authenticated_user_id = if validate_api_key(&req, &state) {
         req.headers().get("x-appwrite-user-id")
             .and_then(|h| h.to_str().ok())
@@ -630,6 +635,7 @@ pub async fn list_data(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> impl Responder {
+    state.total_requests.fetch_add(1, Ordering::Relaxed);
     let authenticated_user_id = if validate_api_key(&req, &state) {
         req.headers().get("x-appwrite-user-id")
             .and_then(|h| h.to_str().ok())
@@ -659,6 +665,7 @@ pub async fn register(
     data: web::Json<AuthRequest>,
     state: web::Data<AppState>,
 ) -> impl Responder {
+    state.total_requests.fetch_add(1, Ordering::Relaxed);
     let hashed_password = match bcrypt::hash(&data.password, bcrypt::DEFAULT_COST) {
         Ok(h) => h,
         Err(_) => return HttpResponse::InternalServerError().body("Hashing error"),
@@ -706,6 +713,7 @@ pub async fn login(
     data: web::Json<AuthRequest>,
     state: web::Data<AppState>,
 ) -> impl Responder {
+    state.total_requests.fetch_add(1, Ordering::Relaxed);
     let row = sqlx::query("SELECT id, username, password_hash FROM users WHERE username = $1")
         .bind(&data.username)
         .fetch_optional(&state.db)

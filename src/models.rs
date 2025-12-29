@@ -38,6 +38,9 @@ pub struct SystemStats {
     pub total_records: i64,
     pub total_users: i64,
     pub total_roles: i64,
+    pub total_requests: usize,
+    pub under_attack: bool,
+    pub load_balancer_mode: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, sqlx::FromRow)]

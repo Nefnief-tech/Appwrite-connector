@@ -18,6 +18,7 @@ pub struct AppState {
     pub under_attack: Arc<AtomicBool>,
     pub load_balancer_mode: Arc<AtomicBool>,
     pub redis_read_index: Arc<AtomicUsize>,
+    pub total_requests: Arc<AtomicUsize>,
 }
 
 pub async fn init_db(database_url: &str) -> Result<Pool<Postgres>> {
