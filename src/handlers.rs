@@ -70,6 +70,7 @@ pub async fn reroll_key(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> impl Responder {
+    log::info!("Manual key reroll requested via dashboard");
     let is_auth = validate_api_key(&req, &state) || verify_appwrite_session(&req, &state).await.is_some();
     if !is_auth { return HttpResponse::Unauthorized().body("Unauthorized"); }
 
