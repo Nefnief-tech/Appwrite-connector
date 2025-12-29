@@ -45,8 +45,11 @@ async fn main() -> std::io::Result<()> {
     let background_state = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(86400));
+        // Skip the immediate tick that happens on creation
+        interval.tick().await;
         loop {
             interval.tick().await;
+            log::info!("Starting scheduled background key rotation...");
             let _ = reroll_key_logic(&background_state).await;
         }
     });

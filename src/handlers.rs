@@ -536,57 +536,83 @@ pub async fn delete_document(
 // --- Admin & Logic ---
 
 pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
-    log::info!("Starting master key reroll process...");
-    let mut key_lock = state.crypto_key.write().await;
-    let old_key = key_lock.clone();
-    let old_crypto = CryptoService::new(old_key);
+    log::info!("Starting atomic master key reroll process...");
     
-    let data_rows = sqlx::query("SELECT id, database_id, collection_id, user_id, encrypted_content FROM data_store").fetch_all(&state.db).await?;
-    let user_rows = sqlx::query("SELECT id, username, email, password_hash FROM users").fetch_all(&state.db).await?;
+    // 1. Fetch all data using a READ lock
+    let (data_rows, user_rows, old_key) = {
+        let key_lock = state.crypto_key.read().await;
+        let data = sqlx::query("SELECT id, database_id, collection_id, user_id, encrypted_content FROM data_store").fetch_all(&state.db).await?;
+        let users = sqlx::query("SELECT id, username, email, password_hash FROM users").fetch_all(&state.db).await?;
+        (data, users, key_lock.clone())
+    };
 
+    let old_crypto = CryptoService::new(old_key);
     let new_key = CryptoService::generate_key();
     let new_crypto = CryptoService::new(new_key.clone());
 
-    log::info!("Re-encrypting {} data_store records...", data_rows.len());
+    // 2. Pre-verify and re-encrypt everything in memory
+    log::info!("Verifying and re-encrypting data in memory...");
+    
+    let mut new_data_payloads = Vec::new();
     for row in &data_rows {
         let id: Uuid = row.get("id");
         let old_enc: String = row.get("encrypted_content");
-        if let Ok(dec) = old_crypto.decrypt(&old_enc) {
-            let new_enc = new_crypto.encrypt(&dec).unwrap();
-            
-            // Update Primary
-            sqlx::query("UPDATE data_store SET encrypted_content = $1 WHERE id = $2").bind(&new_enc).bind(id).execute(&state.db).await?;
-            
-            // Update Mirrors
-            let mirrors = state.mirrors.read().await;
-            for mirror in mirrors.iter() {
-                let _ = sqlx::query("UPDATE data_store SET encrypted_content = $1 WHERE id = $2").bind(&new_enc).bind(id).execute(mirror).await;
-            }
-        }
+        let dec = old_crypto.decrypt(&old_enc).map_err(|e| {
+            log::error!("CRITICAL: Failed to decrypt data_store record {}. Aborting reroll. Error: {}", id, e);
+            anyhow::anyhow!("Decryption failed for record {}", id)
+        })?;
+        let new_enc = new_crypto.encrypt(&dec).unwrap();
+        new_data_payloads.push((id, new_enc));
     }
 
-    log::info!("Re-encrypting {} user password hashes...", user_rows.len());
+    let mut new_user_payloads = Vec::new();
     for row in &user_rows {
         let id: String = row.get("id");
         let old_enc: String = row.get("password_hash");
-        if let Ok(dec) = old_crypto.decrypt(&old_enc) {
-            let new_enc = new_crypto.encrypt(&dec).unwrap();
-            
-            // Update Primary
-            sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2").bind(&new_enc).bind(&id).execute(&state.db).await?;
-            
-            // Update Mirrors
-            let mirrors = state.mirrors.read().await;
-            for mirror in mirrors.iter() {
-                let _ = sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2").bind(&new_enc).bind(&id).execute(mirror).await;
-            }
-        }
+        let dec = old_crypto.decrypt(&old_enc).map_err(|e| {
+            log::error!("CRITICAL: Failed to decrypt user hash {}. Aborting reroll. Error: {}", id, e);
+            anyhow::anyhow!("Decryption failed for user {}", id)
+        })?;
+        let new_enc = new_crypto.encrypt(&dec).unwrap();
+        new_user_payloads.push((id, new_enc));
     }
 
+    // 3. Acquire WRITE lock and start transaction
+    log::info!("Verification successful. Acquiring write lock and committing to database...");
+    let mut key_lock = state.crypto_key.write().await;
+    
+    let mut tx = state.db.begin().await?;
+
+    for (id, new_enc) in new_data_payloads {
+        sqlx::query("UPDATE data_store SET encrypted_content = $1 WHERE id = $2")
+            .bind(new_enc)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    for (id, new_enc) in new_user_payloads {
+        sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+            .bind(new_enc)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+
+    // 4. Update mirrors (Best effort)
+    let mirrors = state.mirrors.read().await;
+    for mirror in mirrors.iter() {
+        // We do these one by one, ignoring failures to prevent one mirror from breaking everything
+        // but in a production system you might want more robust sync.
+        let _ = sqlx::query("UPDATE data_store d SET encrypted_content = s.encrypted_content FROM (SELECT id, encrypted_content FROM data_store) s WHERE d.id = s.id").execute(mirror).await;
+    }
+
+    // 5. Update local state and files
     *key_lock = new_key.clone();
     let new_hex = hex::encode(new_key);
     
-    // Update keys.json
     if let Ok(mut ks) = crate::crypto::KeyStore::load() {
         let _ = ks.update_key(new_hex.clone());
     } else {
@@ -600,22 +626,16 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
 
     let _ = update_env_file("ENCRYPTION_KEY", &new_hex);
 
-    // Selective Cache Clearing (Delete encrypted data, keep sessions)
+    // 6. Flush Redis on all nodes
     log::info!("Invalidating encrypted data in Redis caches...");
     let clear_script = "for i, name in ipairs(redis.call('KEYS', 'data:*')) do redis.call('DEL', name) end";
-    
     if let Ok(mut conn) = state.redis.get_async_connection().await {
         let _: Result<(), _> = redis::cmd("EVAL").arg(clear_script).arg("0").query_async(&mut conn).await;
-    } else {
-        log::error!("Failed to connect to primary Redis for cache invalidation");
     }
-
     let redis_mirrors = state.redis_mirrors.read().await;
     for mirror in redis_mirrors.iter() {
         if let Ok(mut conn) = mirror.get_async_connection().await {
             let _: Result<(), _> = redis::cmd("EVAL").arg(clear_script).arg("0").query_async(&mut conn).await;
-        } else {
-            log::error!("Failed to connect to a Redis mirror for cache invalidation");
         }
     }
 
