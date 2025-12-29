@@ -114,16 +114,22 @@ pub async fn init_db(database_url: &str) -> Result<Pool<Postgres>> {
     .execute(&pool)
     .await?;
 
-    // Migration: Add email if missing
+    // Migration: Add email if missing and drop old username unique constraint
     sqlx::query(
         r#"
         DO $$ 
         BEGIN 
             IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='email') THEN
-                ALTER TABLE users ADD COLUMN email TEXT UNIQUE;
-                -- Update existing users to have a placeholder email based on username
+                ALTER TABLE users ADD COLUMN email TEXT;
                 UPDATE users SET email = username || '@local.system' WHERE email IS NULL;
                 ALTER TABLE users ALTER COLUMN email SET NOT NULL;
+                IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'users' AND indexname = 'users_email_key') THEN
+                    ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email);
+                END IF;
+            END IF;
+            -- Remove unique constraint from username if it exists
+            IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_username_key') THEN
+                ALTER TABLE users DROP CONSTRAINT users_username_key;
             END IF;
         END $$;
         "#

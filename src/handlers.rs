@@ -198,13 +198,17 @@ pub async fn create_session(
     state: web::Data<AppState>,
 ) -> impl Responder {
     state.total_requests.fetch_add(1, Ordering::Relaxed);
-    let email = data["email"].as_str().unwrap_or("");
+    let email_input = data["email"].as_str().unwrap_or("");
     let password = data["password"].as_str().unwrap_or("");
     
-    log::debug!("Login attempt for email: {}", email);
+    // Support both full email and just username
+    let email = if email_input.contains('@') { email_input.to_string() } else { format!("{}@local.system", email_input) };
+    
+    log::debug!("Login attempt for identifier: {}", email);
 
-    let row = sqlx::query("SELECT id, password_hash FROM users WHERE email = $1")
-        .bind(email)
+    let row = sqlx::query("SELECT id, password_hash FROM users WHERE email = $1 OR username = $2")
+        .bind(&email)
+        .bind(email_input)
         .fetch_optional(&state.db)
         .await;
 
@@ -558,16 +562,9 @@ pub async fn wipe_database(
     
     log::warn!("FULL SYSTEM WIPE REQUESTED");
 
-    // 1. Clear Database Tables (Primary)
     let tables = vec!["data_store", "users", "user_profiles", "registered_databases", "registered_redis"];
-    for table in &tables {
-        let query = format!("TRUNCATE TABLE {} CASCADE", table);
-        if let Err(e) = sqlx::query(&query).execute(&state.db).await {
-            log::error!("Failed to truncate primary table {}: {}", table, e);
-        }
-    }
 
-    // 2. Clear Database Tables (Mirrors)
+    // 1. Clear Database Tables (Mirrors FIRST while we still have them in the registry list)
     {
         let mirrors = state.mirrors.read().await;
         for mirror in mirrors.iter() {
@@ -575,6 +572,14 @@ pub async fn wipe_database(
                 let query = format!("TRUNCATE TABLE {} CASCADE", table);
                 let _ = sqlx::query(&query).execute(mirror).await;
             }
+        }
+    }
+
+    // 2. Clear Database Tables (Primary)
+    for table in &tables {
+        let query = format!("TRUNCATE TABLE {} CASCADE", table);
+        if let Err(e) = sqlx::query(&query).execute(&state.db).await {
+            log::error!("Failed to truncate primary table {}: {}", table, e);
         }
     }
 
@@ -654,7 +659,7 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
     
     let mut tx = state.db.begin().await?;
 
-    for (id, new_enc) in new_data_payloads {
+    for (id, new_enc) in &new_data_payloads {
         sqlx::query("UPDATE data_store SET encrypted_content = $1 WHERE id = $2")
             .bind(new_enc)
             .bind(id)
@@ -662,7 +667,7 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
             .await?;
     }
 
-    for (id, new_enc) in new_user_payloads {
+    for (id, new_enc) in &new_user_payloads {
         sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
             .bind(new_enc)
             .bind(id)
@@ -672,12 +677,28 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
 
     tx.commit().await?;
 
-    // 4. Update mirrors (Best effort)
-    let mirrors = state.mirrors.read().await;
-    for mirror in mirrors.iter() {
-        // We do these one by one, ignoring failures to prevent one mirror from breaking everything
-        // but in a production system you might want more robust sync.
-        let _ = sqlx::query("UPDATE data_store d SET encrypted_content = s.encrypted_content FROM (SELECT id, encrypted_content FROM data_store) s WHERE d.id = s.id").execute(mirror).await;
+    // 4. Update mirrors
+    {
+        let mirrors = state.mirrors.read().await;
+        log::info!("Updating {} mirrors with new encrypted data...", mirrors.len());
+        for mirror in mirrors.iter() {
+            // Update data_store on mirror
+            for (id, new_enc) in &new_data_payloads {
+                let _ = sqlx::query("UPDATE data_store SET encrypted_content = $1 WHERE id = $2")
+                    .bind(new_enc)
+                    .bind(id)
+                    .execute(mirror)
+                    .await;
+            }
+            // Update users on mirror
+            for (id, new_enc) in &new_user_payloads {
+                let _ = sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+                    .bind(new_enc)
+                    .bind(id)
+                    .execute(mirror)
+                    .await;
+            }
+        }
     }
 
     // 5. Update local state and files
