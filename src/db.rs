@@ -163,12 +163,107 @@ pub async fn init_mirrors(pool: &Pool<Postgres>) -> Result<Vec<Pool<Postgres>>> 
                     }
                 }
 
+                // Initial Data Sync
+                if let Err(e) = sync_mirrors(pool, &mirror_pool, &columns).await {
+                    log::error!("Failed initial data sync for mirror {}: {}", url, e);
+                } else {
+                    log::info!("Successfully synchronized data to mirror: {}", url);
+                }
+
                 mirrors.push(mirror_pool);
             },
             Err(e) => log::error!("Failed to initialize mirror {}: {}", url, e),
         }
     }
     Ok(mirrors)
+}
+
+async fn sync_mirrors(primary: &Pool<Postgres>, mirror: &Pool<Postgres>, data_store_cols: &[String]) -> Result<()> {
+    // 1. Sync roles_definition
+    let roles = sqlx::query("SELECT name, permissions FROM roles_definition")
+        .fetch_all(primary)
+        .await?;
+    for role in roles {
+        let name: String = role.get("name");
+        let perms: Vec<String> = role.get("permissions");
+        sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING")
+            .bind(name)
+            .bind(perms)
+            .execute(mirror)
+            .await?;
+    }
+
+    // 2. Sync users
+    let users = sqlx::query("SELECT id, username, password_hash, created_at FROM users")
+        .fetch_all(primary)
+        .await?;
+    for user in users {
+        let id: String = user.get("id");
+        let username: String = user.get("username");
+        let hash: String = user.get("password_hash");
+        let created: chrono::DateTime<chrono::Utc> = user.get("created_at");
+        sqlx::query("INSERT INTO users (id, username, password_hash, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING")
+            .bind(id)
+            .bind(username)
+            .bind(hash)
+            .bind(created)
+            .execute(mirror)
+            .await?;
+    }
+
+    // 3. Sync user_profiles
+    let profiles = sqlx::query("SELECT user_id, roles, updated_at FROM user_profiles")
+        .fetch_all(primary)
+        .await?;
+    for profile in profiles {
+        let uid: String = profile.get("user_id");
+        let roles: Vec<String> = profile.get("roles");
+        let updated: chrono::DateTime<chrono::Utc> = profile.get("updated_at");
+        sqlx::query("INSERT INTO user_profiles (user_id, roles, updated_at) VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING")
+            .bind(uid)
+            .bind(roles)
+            .bind(updated)
+            .execute(mirror)
+            .await?;
+    }
+
+    // 4. Sync data_store with dynamic columns
+    let data_rows = sqlx::query("SELECT * FROM data_store")
+        .fetch_all(primary)
+        .await?;
+    
+    for row in data_rows {
+        let mut col_names = Vec::new();
+        let mut placeholders = Vec::new();
+
+        for (i, col) in data_store_cols.iter().enumerate() {
+            col_names.push(format!("\"{}\"", col));
+            placeholders.push(format!("${}", i + 1));
+        }
+
+        let query = format!(
+            "INSERT INTO data_store ({}) VALUES ({}) ON CONFLICT (id) DO NOTHING",
+            col_names.join(", "),
+            placeholders.join(", ")
+        );
+
+        let mut q = sqlx::query(&query);
+        for col in data_store_cols {
+            if col == "id" {
+                let val: uuid::Uuid = row.try_get(col.as_str())?;
+                q = q.bind(val);
+            } else if col == "created_at" {
+                let val: chrono::DateTime<chrono::Utc> = row.try_get(col.as_str())?;
+                q = q.bind(val);
+            } else {
+                let val: Option<String> = row.try_get(col.as_str())?;
+                q = q.bind(val);
+            }
+        }
+        q.execute(mirror).await?;
+    }
+
+    Ok(())
 }
 
 pub fn init_redis(redis_url: &str) -> Result<Client> {
