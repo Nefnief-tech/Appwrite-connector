@@ -55,10 +55,10 @@ async fn main() -> std::io::Result<()> {
     };
 
     // Redis Pub/Sub Listener Task
-    let pubsub_state = state.clone();
+    let pubsub_client = redis_client.clone();
     tokio::spawn(async move {
         loop {
-            match pubsub_state.redis.get_async_connection().await {
+            match pubsub_client.get_async_connection().await {
                 Ok(conn) => {
                     let mut pubsub = conn.into_pubsub();
                     if let Err(e) = pubsub.subscribe("realtime_events").await {
