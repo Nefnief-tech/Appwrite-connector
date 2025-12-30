@@ -51,9 +51,14 @@ async fn create_local_session(state: &AppState, user_id: &str) -> anyhow::Result
     
     // Mirror to other Redis nodes
     let mirrors = state.redis_mirrors.read().await;
-    for mirror in mirrors.iter() {
-        if let Ok(mut m_conn) = mirror.get_async_connection().await {
-            let _: Result<(), _> = m_conn.set_ex(&key, user_id, state.session_duration).await;
+    for (i, mirror) in mirrors.iter().enumerate() {
+        match mirror.get_async_connection().await {
+            Ok(mut m_conn) => {
+                let _: Result<(), _> = m_conn.set_ex(&key, user_id, state.session_duration).await;
+            },
+            Err(e) => {
+                log::warn!("Failed to connect to Redis mirror #{} for session sync: {}", i, e);
+            }
         }
     }
     
