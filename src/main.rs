@@ -35,9 +35,9 @@ async fn main() -> std::io::Result<()> {
     
     // Verify Primary Redis Connection on Startup
     {
-        match redis_client.get_async_connection().await {
+        match redis_client.get_multiplexed_async_connection().await {
             Ok(mut conn) => {
-                match redis::cmd("PING").query_async::<_, String>(&mut conn).await {
+                match redis::cmd("PING").query_async::<String>(&mut conn).await {
                     Ok(_) => log::info!("Successfully connected to Primary Redis"),
                     Err(e) => log::error!("Redis PING failed. Authentication might have failed: {}", e),
                 }
@@ -98,13 +98,13 @@ async fn main() -> std::io::Result<()> {
 
     // Flush Redis on Startup
     log::info!("Flushing Redis caches on startup...");
-    if let Ok(mut conn) = state.redis.get_async_connection().await {
+    if let Ok(mut conn) = state.redis.get_multiplexed_async_connection().await {
         let _: Result<(), _> = redis::cmd("FLUSHDB").query_async(&mut conn).await;
     }
     {
         let mirrors = state.redis_mirrors.read().await;
         for mirror in mirrors.iter() {
-            if let Ok(mut conn) = mirror.get_async_connection().await {
+            if let Ok(mut conn) = mirror.get_multiplexed_async_connection().await {
                 let _: Result<(), _> = redis::cmd("FLUSHDB").query_async(&mut conn).await;
             }
         }

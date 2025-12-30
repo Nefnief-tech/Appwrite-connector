@@ -40,7 +40,7 @@ async fn decrypt_smart(state: &AppState, encrypted_data: &str) -> Option<Vec<u8>
 
 async fn create_local_session(state: &AppState, user_id: &str) -> anyhow::Result<String> {
     let session_token = Uuid::new_v4().to_string();
-    let mut conn = match state.redis.get_async_connection().await {
+    let mut conn = match state.redis.get_multiplexed_async_connection().await {
         Ok(c) => c,
         Err(e) => {
             let info = state.redis.get_connection_info();
@@ -54,7 +54,7 @@ async fn create_local_session(state: &AppState, user_id: &str) -> anyhow::Result
     // Mirror to other Redis nodes
     let mirrors = state.redis_mirrors.read().await;
     for (i, mirror) in mirrors.iter().enumerate() {
-        match mirror.get_async_connection().await {
+        match mirror.get_multiplexed_async_connection().await {
             Ok(mut m_conn) => {
                 let _: Result<(), _> = m_conn.set_ex(&key, user_id, state.session_duration).await;
             },
@@ -109,7 +109,7 @@ async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<St
 
     log::debug!("Attempting to verify session token: {}", token_val);
 
-    let mut conn = match state.redis.get_async_connection().await {
+    let mut conn = match state.redis.get_multiplexed_async_connection().await {
         Ok(c) => c,
         Err(e) => {
             let info = state.redis.get_connection_info();
@@ -226,7 +226,7 @@ async fn publish_realtime_event(
     };
 
     if let Ok(json) = serde_json::to_string(&event) {
-        if let Ok(mut conn) = state.redis.get_async_connection().await {
+        if let Ok(mut conn) = state.redis.get_multiplexed_async_connection().await {
             let _: Result<(), _> = redis::cmd("PUBLISH")
                 .arg("realtime_events")
                 .arg(json)
@@ -280,7 +280,7 @@ pub async fn register_account(
     
     let name = data["name"].as_str().unwrap_or("unknown");
     let password = data["password"].as_str().unwrap_or("");
-    let email = data["email"].as_str().unwrap_or("");
+    let email_input = data["email"].as_str().unwrap_or("");
     let user_id_input = data["userId"].as_str().unwrap_or("unique()");
     
     let user_id = if user_id_input == "unique()" {
@@ -289,10 +289,12 @@ pub async fn register_account(
         user_id_input.to_string()
     };
 
-    if email.is_empty() || password.is_empty() {
+    if email_input.is_empty() || password.is_empty() {
         log::warn!("Registration failed: email or password empty. Body: {:?}", data);
         return HttpResponse::BadRequest().body("Missing email or password");
     }
+
+    let email = if email_input.contains('@') { email_input.to_string() } else { format!("{}@local.system", email_input) };
 
     log::info!("New registration request for email: {} (User ID: {})", email, user_id);
 
@@ -313,7 +315,7 @@ pub async fn register_account(
     let res = sqlx::query("INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)")
         .bind(&user_id)
         .bind(name)
-        .bind(email)
+        .bind(&email)
         .bind(&encrypted_hash)
         .execute(&state.db)
         .await;
@@ -324,7 +326,7 @@ pub async fn register_account(
             let _ = sqlx::query("INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)")
                 .bind(&user_id)
                 .bind(name)
-                .bind(email)
+                .bind(&email)
                 .bind(&encrypted_hash)
                 .execute(mirror).await;
         }
@@ -430,7 +432,7 @@ pub async fn delete_session(
 
     if let Some(t) = token {
         log::info!("Logout request: Invalidating session token ending in ...{}", &t[t.len().saturating_sub(8)..]);
-        if let Ok(mut conn) = state.redis.get_async_connection().await {
+        if let Ok(mut conn) = state.redis.get_multiplexed_async_connection().await {
             let _: () = conn.del(format!("session:{}", t)).await.unwrap_or_default();
         }
     }
@@ -469,15 +471,15 @@ pub async fn get_document(
         let idx = state.redis_read_index.fetch_add(1, Ordering::SeqCst) % total;
         
         if idx == 0 {
-            if let Ok(mut conn) = state.redis.get_async_connection().await {
+            if let Ok(mut conn) = state.redis.get_multiplexed_async_connection().await {
                 cached_val = conn.get(&redis_key).await.ok();
             }
         } else if let Some(mirror) = mirrors.get(idx - 1) {
-            if let Ok(mut conn) = mirror.get_async_connection().await {
+            if let Ok(mut conn) = mirror.get_multiplexed_async_connection().await {
                 cached_val = conn.get(&redis_key).await.ok();
             }
         }
-    } else if let Ok(mut conn) = state.redis.get_async_connection().await {
+    } else if let Ok(mut conn) = state.redis.get_multiplexed_async_connection().await {
         cached_val = conn.get(&redis_key).await.ok();
     }
 
@@ -692,12 +694,12 @@ pub async fn delete_document(
             }
 
             let redis_key = format!("data:{}:{}", user_id, doc_id);
-            if let Ok(mut conn) = state.redis.get_async_connection().await {
+            if let Ok(mut conn) = state.redis.get_multiplexed_async_connection().await {
                 let _: () = conn.del(&redis_key).await.unwrap_or_default();
             }
             let redis_mirrors = state.redis_mirrors.read().await;
             for mirror in redis_mirrors.iter() {
-                if let Ok(mut conn) = mirror.get_async_connection().await {
+                if let Ok(mut conn) = mirror.get_multiplexed_async_connection().await {
                     let _: () = conn.del(&redis_key).await.unwrap_or_default();
                 }
             }
@@ -739,12 +741,12 @@ pub async fn wipe_database(
         }
     }
 
-    let _ = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{{\"data:read\", \"data:write\", \"roles:manage\"}}'), ('user', '{{\"data:read\", \"data:write\"}}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(&state.db).await;
+    let _ = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{\"data:read\", \"data:write\", \"roles:manage\"}'), ('user', '{\"data:read\", \"data:write\"}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(&state.db).await;
 
     {
         let mirrors = state.mirrors.read().await;
         for mirror in mirrors.iter() {
-            if let Err(e) = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{{\"data:read\", \"data:write\", \"roles:manage\"}}'), ('user', '{{\"data:read\", \"data:write\"}}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(mirror).await {
+            if let Err(e) = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{\"data:read\", \"data:write\", \"roles:manage\"}'), ('user', '{\"data:read\", \"data:write\"}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(mirror).await {
                 log::error!("Failed to reset default roles on mirror: {}", e);
             }
         }
@@ -753,12 +755,12 @@ pub async fn wipe_database(
     log::info!("Clearing encrypted data from Redis caches...");
     let clear_script = "for i, name in ipairs(redis.call('KEYS', 'data:*')) do redis.call('DEL', name) end";
     
-    if let Ok(mut conn) = state.redis.get_async_connection().await {
+    if let Ok(mut conn) = state.redis.get_multiplexed_async_connection().await {
         let _: Result<(), _> = redis::cmd("EVAL").arg(clear_script).arg("0").query_async(&mut conn).await;
     }
     let redis_mirrors = state.redis_mirrors.read().await;
     for mirror in redis_mirrors.iter() {
-        if let Ok(mut conn) = mirror.get_async_connection().await {
+        if let Ok(mut conn) = mirror.get_multiplexed_async_connection().await {
             let _: Result<(), _> = redis::cmd("EVAL").arg(clear_script).arg("0").query_async(&mut conn).await;
         }
     }
@@ -868,12 +870,12 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
 
     log::info!("Invalidating encrypted data in Redis caches...");
     let clear_script = "for i, name in ipairs(redis.call('KEYS', 'data:*')) do redis.call('DEL', name) end";
-    if let Ok(mut conn) = state.redis.get_async_connection().await {
+    if let Ok(mut conn) = state.redis.get_multiplexed_async_connection().await {
         let _: Result<(), _> = redis::cmd("EVAL").arg(clear_script).arg("0").query_async(&mut conn).await;
     }
     let redis_mirrors = state.redis_mirrors.read().await;
     for mirror in redis_mirrors.iter() {
-        if let Ok(mut conn) = mirror.get_async_connection().await {
+        if let Ok(mut conn) = mirror.get_multiplexed_async_connection().await {
             let _: Result<(), _> = redis::cmd("EVAL").arg(clear_script).arg("0").query_async(&mut conn).await;
         }
     }
@@ -1033,9 +1035,9 @@ pub async fn list_redis_mirrors(req: HttpRequest, state: web::Data<AppState>) ->
     let mut statuses = Vec::new();
 
     // 1. Primary Redis
-    let mut primary_conn = state.redis.get_async_connection().await;
+    let mut primary_conn = state.redis.get_multiplexed_async_connection().await;
     let primary_online = match &mut primary_conn {
-        Ok(c) => redis::cmd("PING").query_async::<_, String>(c).await.is_ok(),
+        Ok(c) => redis::cmd("PING").query_async::<String>(c).await.is_ok(),
         Err(_) => false,
     };
     
@@ -1059,8 +1061,8 @@ pub async fn list_redis_mirrors(req: HttpRequest, state: web::Data<AppState>) ->
         let mut client = crate::db::init_redis(&url);
         let online = match &mut client {
             Ok(c) => {
-                if let Ok(mut conn) = c.get_async_connection().await {
-                    redis::cmd("PING").query_async::<_, String>(&mut conn).await.is_ok()
+                if let Ok(mut conn) = c.get_multiplexed_async_connection().await {
+                    redis::cmd("PING").query_async::<String>(&mut conn).await.is_ok()
                 } else { false }
             },
             Err(_) => false,
@@ -1093,7 +1095,7 @@ pub async fn add_redis_mirror(
         Err(e) => return HttpResponse::BadRequest().body(format!("Invalid Redis URL: {}", e)),
     };
 
-    if let Err(e) = client.get_async_connection().await {
+    if let Err(e) = client.get_multiplexed_async_connection().await {
         return HttpResponse::BadRequest().body(format!("Failed to connect to Redis: {}", e));
     }
 
