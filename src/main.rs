@@ -71,9 +71,10 @@ async fn main() -> std::io::Result<()> {
         loop {
             match pubsub_client.get_async_connection().await {
                 Ok(conn) => {
+                    log::info!("Attempting Redis PubSub subscription...");
                     let mut pubsub = conn.into_pubsub();
                     if let Err(e) = pubsub.subscribe("realtime_events").await {
-                        log::error!("Redis PubSub subscribe failed: {}", e);
+                        log::error!("Redis PubSub subscribe failed: {}. Retrying in 5s...", e);
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         continue;
                     }
@@ -85,9 +86,10 @@ async fn main() -> std::io::Result<()> {
                         let payload: String = msg.get_payload().unwrap_or_default();
                         let _ = rt_tx.send(payload);
                     }
+                    log::warn!("PubSub stream ended. Reconnecting...");
                 }
                 Err(e) => {
-                    log::error!("Redis PubSub connection failed: {}. Retrying...", e);
+                    log::error!("Redis PubSub connection failed: {}. Retrying in 5s...", e);
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             }
@@ -138,6 +140,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(cors)
             // Appwrite Emulator API
             .service(ping)
+            .service(realtime)
             .service(get_account)
             .service(register_account)
             .service(create_session)
@@ -146,7 +149,6 @@ async fn main() -> std::io::Result<()> {
             .service(list_documents)
             .service(create_document)
             .service(delete_document)
-            .service(realtime)
             // Admin API
             .service(get_stats)
             .service(list_users)

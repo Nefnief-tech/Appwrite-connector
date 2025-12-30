@@ -7,6 +7,8 @@ use redis::AsyncCommands;
 use sqlx::Row;
 use std::sync::atomic::Ordering;
 use chrono::Utc;
+use actix_ws::Message;
+use futures_util::StreamExt as _;
 
 // --- Helpers ---
 
@@ -131,10 +133,10 @@ async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<St
 
 // --- Appwrite API Implementation ---
 
-use actix_ws::Message;
-use futures_util::StreamExt as _;
-
-// --- Realtime WebSocket Handler ---
+#[get("/v1/ping")]
+pub async fn ping() -> impl Responder {
+    HttpResponse::Ok().body("pong")
+}
 
 #[get("/v1/realtime")]
 pub async fn realtime(
@@ -142,6 +144,7 @@ pub async fn realtime(
     stream: web::Payload,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse, actix_web::Error> {
+    log::info!("Realtime handshake initiated from {}", req.peer_addr().map(|a| a.to_string()).unwrap_or_else(|| "unknown".into()));
     let (res, mut session, mut msg_stream) = actix_ws::handle(&req, stream)?;
 
     // Extract channels from query string (Appwrite format: ?channels[]=...)
@@ -154,7 +157,7 @@ pub async fn realtime(
         })
         .collect();
 
-    log::info!("New Realtime connection subscribing to channels: {:?}", channels);
+    log::info!("Realtime connection established. Subscriptions: {:?}", channels);
 
     let mut broadcast_rx = state.realtime_sender.subscribe();
 
@@ -169,9 +172,6 @@ pub async fn realtime(
                                 Message::Ping(bytes) => {
                                     if let Err(_) = session.pong(&bytes).await { break; }
                                 }
-                                Message::Text(_) => {
-                                    // Appwrite doesn't usually expect client messages on WS
-                                }
                                 Message::Close(_) => break,
                                 _ => {}
                             }
@@ -182,7 +182,6 @@ pub async fn realtime(
                 // Handle Broadcast event from other parts of the system (via Redis)
                 Ok(event_json) = broadcast_rx.recv() => {
                     if let Ok(event) = serde_json::from_str::<AppwriteRealtimeEvent>(&event_json) {
-                        // Check if this connection is interested in any of the event's channels
                         let interested = if channels.is_empty() {
                             true
                         } else {
@@ -197,6 +196,7 @@ pub async fn realtime(
             }
         }
         let _ = session.close(None).await;
+        log::info!("Realtime connection closed");
     });
 
     Ok(res)
@@ -235,11 +235,6 @@ async fn publish_realtime_event(
     }
 }
 
-#[get("/v1/ping")]
-pub async fn ping() -> impl Responder {
-    HttpResponse::Ok().body("pong")
-}
-
 #[get("/v1/account")]
 pub async fn get_account(
     req: HttpRequest,
@@ -250,6 +245,8 @@ pub async fn get_account(
         Some(id) => id,
         None => return HttpResponse::Unauthorized().finish(),
     };
+
+    log::info!("User {} is fetching their account profile", user_id);
 
     let row = sqlx::query("SELECT id, username, email, created_at FROM users WHERE id = $1")
         .bind(&user_id)
@@ -296,6 +293,8 @@ pub async fn register_account(
         log::warn!("Registration failed: email or password empty. Body: {:?}", data);
         return HttpResponse::BadRequest().body("Missing email or password");
     }
+
+    log::info!("New registration request for email: {} (User ID: {})", email, user_id);
 
     let hashed_password = match bcrypt::hash(password, bcrypt::DEFAULT_COST) {
         Ok(h) => h,
@@ -357,7 +356,7 @@ pub async fn create_session(
     
     let email = if email_input.contains('@') { email_input.to_string() } else { format!("{}@local.system", email_input) };
     
-    log::debug!("Login attempt for identifier: {}", email);
+    log::info!("Login attempt for identifier: {}", email);
 
     let row = sqlx::query("SELECT id, password_hash FROM users WHERE email = $1 OR username = $2")
         .bind(&email)
@@ -392,14 +391,14 @@ pub async fn create_session(
                                 .cookie(actix_web::cookie::Cookie::build("a_session_console", &token)
                                     .path("/")
                                     .http_only(true)
-                                    .same_site(actix_web::cookie::SameSite::Lax)
-                                    .secure(false)
+                                    .same_site(actix_web::cookie::SameSite::None)
+                                    .secure(true)
                                     .finish())
                                 .cookie(actix_web::cookie::Cookie::build(cookie_name, &token)
                                     .path("/")
                                     .http_only(true)
-                                    .same_site(actix_web::cookie::SameSite::Lax)
-                                    .secure(false)
+                                    .same_site(actix_web::cookie::SameSite::None)
+                                    .secure(true)
                                     .finish())
                                 .json(AppwriteSession {
                                     id: token,
@@ -430,6 +429,7 @@ pub async fn delete_session(
         .map(|s| s.to_string());
 
     if let Some(t) = token {
+        log::info!("Logout request: Invalidating session token ending in ...{}", &t[t.len().saturating_sub(8)..]);
         if let Ok(mut conn) = state.redis.get_async_connection().await {
             let _: () = conn.del(format!("session:{}", t)).await.unwrap_or_default();
         }
@@ -456,6 +456,8 @@ pub async fn get_document(
             }
         }
     };
+
+    log::info!("User {} is fetching document {} from collection {} (DB: {})", user_id, doc_id, col_id, db_id);
 
     let redis_key = format!("data:{}:{}", user_id, doc_id);
     let lb_enabled = state.load_balancer_mode.load(Ordering::Relaxed);
@@ -538,6 +540,8 @@ pub async fn list_documents(
         }
     };
 
+    log::info!("User {} is listing documents in collection {} (DB: {})", user_id, col_id, db_id);
+
     let rows = sqlx::query("SELECT id, encrypted_content, created_at FROM data_store WHERE database_id = $1 AND collection_id = $2 AND user_id = $3 ORDER BY created_at DESC")
         .bind(&db_id)
         .bind(&col_id)
@@ -593,6 +597,8 @@ pub async fn create_document(
             }
         }
     };
+
+    log::info!("User {} is creating a new document in collection {} (DB: {})", user_id, col_id, db_id);
 
     let doc_id = data["$id"].as_str().map(|s| s.to_string()).unwrap_or_else(|| Uuid::new_v4().to_string());
     let mut payload = data.0.clone();
@@ -657,6 +663,8 @@ pub async fn delete_document(
             }
         }
     };
+
+    log::info!("User {} is deleting document {} from collection {} (DB: {})", user_id, doc_id, col_id, db_id);
 
     let id_uuid = match Uuid::parse_str(&doc_id) {
         Ok(u) => u,
@@ -946,6 +954,7 @@ pub async fn list_roles(req: HttpRequest, state: web::Data<AppState>) -> impl Re
 #[post("/roles")]
 pub async fn update_role_definition(req: HttpRequest, data: web::Json<RoleDefinition>, state: web::Data<AppState>) -> impl Responder {
     if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
+    log::info!("Admin is updating role definition for: {}", data.name);
     let _ = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions")
         .bind(&data.name).bind(&data.permissions).execute(&state.db).await;
     HttpResponse::Ok().json(MessageResponse { message: "Updated".to_string() })
@@ -964,6 +973,7 @@ pub async fn list_databases(req: HttpRequest, state: web::Data<AppState>) -> imp
 #[post("/admin/databases")]
 pub async fn add_database(req: HttpRequest, data: web::Json<DatabaseConfig>, state: web::Data<AppState>) -> impl Responder {
     if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
+    log::info!("Admin is registering a new database mirror: {} ({})", data.name, data.url);
     let _ = sqlx::query("INSERT INTO registered_databases (name, url) VALUES ($1, $2)").bind(&data.name).bind(&data.url).execute(&state.db).await;
     HttpResponse::Ok().json(MessageResponse { message: "Added".to_string() })
 }
@@ -1074,6 +1084,8 @@ pub async fn add_redis_mirror(
     state: web::Data<AppState>,
 ) -> impl Responder {
     if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
+
+    log::info!("Admin is registering a new Redis mirror: {} ({})", data.name, data.url);
 
     // 1. Try to connect
     let client = match crate::db::init_redis(&data.url) {
