@@ -42,6 +42,20 @@ async fn main() -> std::io::Result<()> {
         total_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
 
+    // Flush Redis on Startup
+    log::info!("Flushing Redis caches on startup...");
+    if let Ok(mut conn) = state.redis.get_async_connection().await {
+        let _: Result<(), _> = redis::cmd("FLUSHDB").query_async(&mut conn).await;
+    }
+    {
+        let mirrors = state.redis_mirrors.read().await;
+        for mirror in mirrors.iter() {
+            if let Ok(mut conn) = mirror.get_async_connection().await {
+                let _: Result<(), _> = redis::cmd("FLUSHDB").query_async(&mut conn).await;
+            }
+        }
+    }
+
     let background_state = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(86400));

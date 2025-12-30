@@ -98,6 +98,11 @@ async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<St
 
 // --- Appwrite API Implementation ---
 
+#[get("/v1/ping")]
+pub async fn ping() -> impl Responder {
+    HttpResponse::Ok().body("pong")
+}
+
 #[get("/v1/account")]
 pub async fn get_account(
     req: HttpRequest,
@@ -137,6 +142,8 @@ pub async fn register_account(
     state: web::Data<AppState>,
 ) -> impl Responder {
     state.total_requests.fetch_add(1, Ordering::Relaxed);
+    log::debug!("Registration request body: {:?}", data);
+    
     let name = data["name"].as_str().unwrap_or("unknown");
     let password = data["password"].as_str().unwrap_or("");
     let email = data["email"].as_str().unwrap_or("");
@@ -195,6 +202,7 @@ pub async fn register_account(
             status: true,
         })
     } else {
+        log::error!("Registration DB error: {:?}", res.err());
         HttpResponse::BadRequest().body("User or email already exists")
     }
 }
@@ -211,6 +219,8 @@ pub async fn create_session(
     
     let email = if email_input.contains('@') { email_input.to_string() } else { format!("{}@local.system", email_input) };
     
+    log::debug!("Login attempt for identifier: {}", email);
+
     let row = sqlx::query("SELECT id, password_hash FROM users WHERE email = $1 OR username = $2")
         .bind(&email)
         .bind(email_input)
@@ -233,12 +243,11 @@ pub async fn create_session(
                                 .and_then(|h| h.to_str().ok())
                                 .unwrap_or("console");
 
-                            let cookie_name = if project_id == "console" {
-                                "a_session_console".to_string()
-                            } else {
-                                format!("a_session_{}", project_id)
-                            };
-
+                                                let cookie_name = if project_id == "console" {
+                                                    "a_session_console".to_string()
+                                                } else {
+                                                    format!("a_session_{}", project_id)
+                                                };
                             log::info!("Login successful for user: {}", user_id);
                             return HttpResponse::Created()
                                 .cookie(actix_web::cookie::Cookie::build("a_session_console", &token)
@@ -338,7 +347,7 @@ pub async fn get_document(
                 id: doc_id,
                 collection_id: col_id,
                 database_id: db_id,
-                created_at: Utc::now().to_rfc3339(),
+                created_at: Utc::now().to_rfc3339(), 
                 updated_at: Utc::now().to_rfc3339(),
                 data,
             });
@@ -561,7 +570,9 @@ pub async fn wipe_database(
         for mirror in mirrors.iter() {
             for table in &tables {
                 let query = format!("TRUNCATE TABLE {} CASCADE", table);
-                let _ = sqlx::query(&query).execute(mirror).await;
+                if let Err(e) = sqlx::query(&query).execute(mirror).await {
+                    log::error!("Failed to truncate mirror table {}: {}", table, e);
+                }
             }
         }
     }
@@ -578,17 +589,23 @@ pub async fn wipe_database(
     {
         let mirrors = state.mirrors.read().await;
         for mirror in mirrors.iter() {
-            let _ = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{{\"data:read\", \"data:write\", \"roles:manage\"}}'), ('user', '{{\"data:read\", \"data:write\"}}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(mirror).await;
+            if let Err(e) = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{{\"data:read\", \"data:write\", \"roles:manage\"}}'), ('user', '{{\"data:read\", \"data:write\"}}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(mirror).await {
+                log::error!("Failed to reset default roles on mirror: {}", e);
+            }
         }
     }
 
+    // 5. Clear Redis (Targeted)
+    log::info!("Clearing encrypted data from Redis caches...");
+    let clear_script = "for i, name in ipairs(redis.call('KEYS', 'data:*')) do redis.call('DEL', name) end";
+    
     if let Ok(mut conn) = state.redis.get_async_connection().await {
-        let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap_or_default();
+        let _: Result<(), _> = redis::cmd("EVAL").arg(clear_script).arg("0").query_async(&mut conn).await;
     }
     let redis_mirrors = state.redis_mirrors.read().await;
     for mirror in redis_mirrors.iter() {
         if let Ok(mut conn) = mirror.get_async_connection().await {
-            let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap_or_default();
+            let _: Result<(), _> = redis::cmd("EVAL").arg(clear_script).arg("0").query_async(&mut conn).await;
         }
     }
 
@@ -735,11 +752,6 @@ fn update_env_file(key: &str, value: &str) -> std::io::Result<()> {
 ", key, value));
     }
     fs::write(".env", new_content)
-}
-
-#[get("/v1/ping")]
-pub async fn ping() -> impl Responder {
-    HttpResponse::Ok().body("pong")
 }
 
 #[get("/admin/users")]
