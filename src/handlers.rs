@@ -66,6 +66,13 @@ async fn create_local_session(state: &AppState, user_id: &str) -> anyhow::Result
 }
 
 async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<String> {
+    // Log all cookies for debugging
+    if let Ok(cookies) = req.cookies() {
+        for cookie in cookies.iter() {
+            log::debug!("Incoming cookie: {}={}", cookie.name(), cookie.value());
+        }
+    }
+
     // 1. Try X-Appwrite-JWT
     let mut token = req.headers().get("x-appwrite-jwt")
         .and_then(|h| h.to_str().ok())
@@ -98,6 +105,8 @@ async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<St
         }
     };
 
+    log::debug!("Attempting to verify session token: {}", token_val);
+
     let mut conn = match state.redis.get_async_connection().await {
         Ok(c) => c,
         Err(e) => {
@@ -110,11 +119,11 @@ async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<St
     let key = format!("session:{}", token_val);
     match conn.get::<_, String>(key).await {
         Ok(user_id) => {
-            log::debug!("Session verified for user: {}", user_id);
+            log::info!("Session verified for user: {}", user_id);
             Some(user_id)
         },
-        Err(_) => {
-            log::warn!("Session token not found in Redis: {}", token_val);
+        Err(e) => {
+            log::warn!("Session token {} not found in Redis: {}", token_val, e);
             None
         }
     }

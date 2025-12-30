@@ -25,14 +25,25 @@ async fn main() -> std::io::Result<()> {
     log::info!("Starting Standalone Server at http://{}:{}", config.host, config.port);
 
     let pool = init_db(&config.database_url).await.expect("Failed to connect to Database");
+    
+    // Clear stale Redis mirrors from DB to prevent port 1354 conflicts
+    log::info!("Cleaning up Redis mirror registry...");
+    let _ = sqlx::query("TRUNCATE TABLE registered_redis").execute(&pool).await;
+
     let mirrors = init_mirrors(&pool).await.expect("Failed to initialize mirrors");
     let redis_client = init_redis(&config.redis_url).expect("Failed to connect to Redis");
     
     // Verify Primary Redis Connection on Startup
     {
-        let mut conn = redis_client.get_async_connection().await.expect("Failed to connect to Primary Redis. Check your REDIS_URL and password.");
-        let _: String = redis::cmd("PING").query_async(&mut conn).await.expect("Redis PING failed. Authentication might have failed.");
-        log::info!("Successfully connected to Primary Redis");
+        match redis_client.get_async_connection().await {
+            Ok(mut conn) => {
+                match redis::cmd("PING").query_async::<_, String>(&mut conn).await {
+                    Ok(_) => log::info!("Successfully connected to Primary Redis"),
+                    Err(e) => log::error!("Redis PING failed. Authentication might have failed: {}", e),
+                }
+            },
+            Err(e) => log::error!("Failed to connect to Primary Redis. Check your REDIS_URL and password: {}", e),
+        }
     }
 
     let redis_mirrors = db::init_redis_mirrors(&pool).await.unwrap_or_default();
