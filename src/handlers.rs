@@ -87,13 +87,32 @@ async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<St
     }
 
     let token_val = match token {
-        Some(t) => t,
-        None => return None
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            return None;
+        }
     };
 
-    let mut conn = state.redis.get_async_connection().await.ok()?;
+    let mut conn = match state.redis.get_async_connection().await {
+        Ok(c) => c,
+        Err(e) => {
+            let info = state.redis.get_connection_info();
+            log::error!("Redis connection error in session check to {}: {}", info.addr, e);
+            return None;
+        }
+    };
+
     let key = format!("session:{}", token_val);
-    conn.get::<_, String>(key).await.ok()
+    match conn.get::<_, String>(key).await {
+        Ok(user_id) => {
+            log::debug!("Session verified for user: {}", user_id);
+            Some(user_id)
+        },
+        Err(_) => {
+            log::warn!("Session token not found in Redis: {}", token_val);
+            None
+        }
+    }
 }
 
 // --- Appwrite API Implementation ---
@@ -156,6 +175,7 @@ pub async fn register_account(
     };
 
     if email.is_empty() || password.is_empty() {
+        log::warn!("Registration failed: email or password empty. Body: {:?}", data);
         return HttpResponse::BadRequest().body("Missing email or password");
     }
 
@@ -243,24 +263,25 @@ pub async fn create_session(
                                 .and_then(|h| h.to_str().ok())
                                 .unwrap_or("console");
 
-                                                let cookie_name = if project_id == "console" {
-                                                    "a_session_console".to_string()
-                                                } else {
-                                                    format!("a_session_{}", project_id)
-                                                };
+                            let cookie_name = if project_id == "console" {
+                                "a_session_console".to_string()
+                            } else {
+                                format!("a_session_{}", project_id)
+                            };
+
                             log::info!("Login successful for user: {}", user_id);
                             return HttpResponse::Created()
                                 .cookie(actix_web::cookie::Cookie::build("a_session_console", &token)
                                     .path("/")
                                     .http_only(true)
-                                    .same_site(actix_web::cookie::SameSite::None)
-                                    .secure(true)
+                                    .same_site(actix_web::cookie::SameSite::Lax)
+                                    .secure(false)
                                     .finish())
                                 .cookie(actix_web::cookie::Cookie::build(cookie_name, &token)
                                     .path("/")
                                     .http_only(true)
-                                    .same_site(actix_web::cookie::SameSite::None)
-                                    .secure(true)
+                                    .same_site(actix_web::cookie::SameSite::Lax)
+                                    .secure(false)
                                     .finish())
                                 .json(AppwriteSession {
                                     id: token,
@@ -595,7 +616,6 @@ pub async fn wipe_database(
         }
     }
 
-    // 5. Clear Redis (Targeted)
     log::info!("Clearing encrypted data from Redis caches...");
     let clear_script = "for i, name in ipairs(redis.call('KEYS', 'data:*')) do redis.call('DEL', name) end";
     
@@ -733,13 +753,12 @@ fn update_env_file(key: &str, value: &str) -> std::io::Result<()> {
     let content = fs::read_to_string(".env").unwrap_or_default();
     let mut new_content = String::new();
     let mut found = false;
-    let prefix = format!("{} =", key);
+    let prefix = format!("{}=", key);
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with(&prefix) {
             if !found {
-                new_content.push_str(&format!("{} = {}
-", key, value));
+                new_content.push_str(&format!("{}={}\n", key, value));
                 found = true;
             }
         } else {
@@ -748,8 +767,7 @@ fn update_env_file(key: &str, value: &str) -> std::io::Result<()> {
         }
     }
     if !found {
-        new_content.push_str(&format!("{} = {}
-", key, value));
+        new_content.push_str(&format!("{}={}\n", key, value));
     }
     fs::write(".env", new_content)
 }
