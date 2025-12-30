@@ -127,6 +127,14 @@ pub struct AppwriteDocumentList {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AppwriteRealtimeEvent {
+    pub events: Vec<String>,
+    pub channels: Vec<String>,
+    pub timestamp: String,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DatabaseStatus {
     pub name: String,
     pub url: String,

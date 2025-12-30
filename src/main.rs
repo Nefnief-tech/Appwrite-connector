@@ -13,6 +13,7 @@ use handlers::*;
 use dotenv::dotenv;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -26,12 +27,22 @@ async fn main() -> std::io::Result<()> {
     let pool = init_db(&config.database_url).await.expect("Failed to connect to Database");
     let mirrors = init_mirrors(&pool).await.expect("Failed to initialize mirrors");
     let redis_client = init_redis(&config.redis_url).expect("Failed to connect to Redis");
+    
+    // Verify Primary Redis Connection on Startup
+    {
+        let mut conn = redis_client.get_async_connection().await.expect("Failed to connect to Primary Redis. Check your REDIS_URL and password.");
+        let _: String = redis::cmd("PING").query_async(&mut conn).await.expect("Redis PING failed. Authentication might have failed.");
+        log::info!("Successfully connected to Primary Redis");
+    }
+
     let redis_mirrors = db::init_redis_mirrors(&pool).await.unwrap_or_default();
+
+    let (rt_tx, _) = tokio::sync::broadcast::channel::<String>(100);
 
     let state = AppState {
         db: pool,
         mirrors: Arc::new(RwLock::new(mirrors)),
-        redis: redis_client,
+        redis: redis_client.clone(),
         redis_mirrors: Arc::new(RwLock::new(redis_mirrors)),
         crypto_key: Arc::new(RwLock::new(config.encryption_key.clone())),
         appwrite_api_key: config.appwrite_api_key.clone(),
@@ -40,7 +51,37 @@ async fn main() -> std::io::Result<()> {
         load_balancer_mode: Arc::new(std::sync::atomic::AtomicBool::new(config.load_balancer_mode)),
         redis_read_index: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         total_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        realtime_sender: rt_tx.clone(),
     };
+
+    // Redis Pub/Sub Listener Task
+    let pubsub_state = state.clone();
+    tokio::spawn(async move {
+        loop {
+            match pubsub_state.redis.get_async_connection().await {
+                Ok(conn) => {
+                    let mut pubsub = conn.into_pubsub();
+                    if let Err(e) = pubsub.subscribe("realtime_events").await {
+                        log::error!("Redis PubSub subscribe failed: {}", e);
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+                    
+                    let mut stream = pubsub.on_message();
+                    log::info!("Realtime PubSub listener active on channel 'realtime_events'");
+                    
+                    while let Some(msg) = stream.next().await {
+                        let payload: String = msg.get_payload().unwrap_or_default();
+                        let _ = rt_tx.send(payload);
+                    }
+                }
+                Err(e) => {
+                    log::error!("Redis PubSub connection failed: {}. Retrying...", e);
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
+        }
+    });
 
     // Flush Redis on Startup
     log::info!("Flushing Redis caches on startup...");
@@ -94,6 +135,7 @@ async fn main() -> std::io::Result<()> {
             .service(list_documents)
             .service(create_document)
             .service(delete_document)
+            .service(realtime)
             // Admin API
             .service(get_stats)
             .service(list_users)

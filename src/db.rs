@@ -19,6 +19,7 @@ pub struct AppState {
     pub load_balancer_mode: Arc<AtomicBool>,
     pub redis_read_index: Arc<AtomicUsize>,
     pub total_requests: Arc<AtomicUsize>,
+    pub realtime_sender: tokio::sync::broadcast::Sender<String>,
 }
 
 pub async fn init_db(database_url: &str) -> Result<Pool<Postgres>> {

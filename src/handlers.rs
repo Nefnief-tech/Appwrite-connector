@@ -117,6 +117,110 @@ async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<St
 
 // --- Appwrite API Implementation ---
 
+use actix_ws::Message;
+use futures_util::StreamExt as _;
+
+// --- Realtime WebSocket Handler ---
+
+#[get("/v1/realtime")]
+pub async fn realtime(
+    req: HttpRequest,
+    stream: web::Payload,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let (res, mut session, mut msg_stream) = actix_ws::handle(&req, stream)?;
+
+    // Extract channels from query string (Appwrite format: ?channels[]=...)
+    let query = req.query_string();
+    let channels: Vec<String> = query.split('&')
+        .filter(|s| s.contains("channels[]="))
+        .map(|s| {
+            let val = s.split('=').last().unwrap_or_default();
+            urlencoding::decode(val).unwrap_or_default().into_owned()
+        })
+        .collect();
+
+    log::info!("New Realtime connection subscribing to channels: {:?}", channels);
+
+    let mut broadcast_rx = state.realtime_sender.subscribe();
+
+    actix_web::rt::spawn(async move {
+        loop {
+            tokio::select! {
+                // Handle WebSocket message from client
+                Some(res) = msg_stream.next() => {
+                    match res {
+                        Ok(msg) => {
+                            match msg {
+                                Message::Ping(bytes) => {
+                                    if let Err(_) = session.pong(&bytes).await { break; }
+                                }
+                                Message::Text(_) => {
+                                    // Appwrite doesn't usually expect client messages on WS
+                                }
+                                Message::Close(_) => break,
+                                _ => {}
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                // Handle Broadcast event from other parts of the system (via Redis)
+                Ok(event_json) = broadcast_rx.recv() => {
+                    if let Ok(event) = serde_json::from_str::<AppwriteRealtimeEvent>(&event_json) {
+                        // Check if this connection is interested in any of the event's channels
+                        let interested = if channels.is_empty() {
+                            true
+                        } else {
+                            event.channels.iter().any(|c| channels.contains(c))
+                        };
+
+                        if interested {
+                            if let Err(_) = session.text(event_json).await { break; }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = session.close(None).await;
+    });
+
+    Ok(res)
+}
+
+async fn publish_realtime_event(
+    state: &AppState,
+    event_type: &str,
+    db_id: &str,
+    col_id: &str,
+    doc_id: &str,
+    payload: serde_json::Value,
+) {
+    let event_name = format!("databases.{}.collections.{}.documents.{}.{}", db_id, col_id, doc_id, event_type);
+    let channels = vec![
+        format!("databases.{}.collections.{}.documents", db_id, col_id),
+        format!("databases.{}.collections.{}.documents.{}", db_id, col_id, doc_id),
+        format!("databases.{}", db_id),
+        "documents".to_string()
+    ];
+
+    let event = AppwriteRealtimeEvent {
+        events: vec![event_name],
+        channels,
+        timestamp: Utc::now().to_rfc3339(),
+        payload,
+    };
+
+    if let Ok(json) = serde_json::to_string(&event) {
+        if let Ok(mut conn) = state.redis.get_async_connection().await {
+            let _: Result<(), _> = redis::cmd("PUBLISH")
+                .arg("realtime_events")
+                .arg(json)
+                .query_async(&mut conn).await;
+        }
+    }
+}
+
 #[get("/v1/ping")]
 pub async fn ping() -> impl Responder {
     HttpResponse::Ok().body("pong")
@@ -502,14 +606,19 @@ pub async fn create_document(
 
     if res.is_ok() {
         let now = Utc::now().to_rfc3339();
-        HttpResponse::Created().json(AppwriteDocument {
-            id: doc_id,
-            collection_id: col_id,
-            database_id: db_id,
+        let doc = AppwriteDocument {
+            id: doc_id.clone(),
+            collection_id: col_id.clone(),
+            database_id: db_id.clone(),
             created_at: now.clone(),
             updated_at: now,
-            data: payload,
-        })
+            data: payload.clone(),
+        };
+
+        // Emit Realtime Event
+        publish_realtime_event(&state, "create", &db_id, &col_id, &doc_id, serde_json::to_value(&doc).unwrap_or_default()).await;
+
+        HttpResponse::Created().json(doc)
     } else {
         HttpResponse::InternalServerError().finish()
     }
@@ -522,7 +631,7 @@ pub async fn delete_document(
     state: web::Data<AppState>,
 ) -> impl Responder {
     state.total_requests.fetch_add(1, Ordering::Relaxed);
-    let (_db_id, _col_id, doc_id) = path.into_inner();
+    let (db_id, col_id, doc_id) = path.into_inner();
     
     let user_id = match get_user_from_session(&req, &state).await {
         Some(id) => id,
@@ -548,6 +657,9 @@ pub async fn delete_document(
 
     match res {
         Ok(r) if r.rows_affected() > 0 => {
+            // Emit Realtime Event
+            publish_realtime_event(&state, "delete", &db_id, &col_id, &doc_id, serde_json::json!({ "$id": doc_id })).await;
+
             let mirrors = state.mirrors.read().await;
             for mirror in mirrors.iter() {
                 let _ = sqlx::query("DELETE FROM data_store WHERE id = $1 AND user_id = $2")
