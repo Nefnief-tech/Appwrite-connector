@@ -848,7 +848,10 @@
                 try {
                     const account = await api('/v1/account');
                     session.username = account.name || account.email || 'User';
+                    // Persist the enriched session
+                    localStorage.setItem('connector_session', JSON.stringify(session));
                 } catch (e) {
+                    console.warn('Could not enrich session:', e);
                     session.username = 'User';
                 }
             } else if (session.name) {
@@ -860,7 +863,7 @@
             
             const displayName = session.username || 'User';
             document.getElementById('currentUsername').innerText = displayName;
-            document.getElementById('userInitial').innerText = displayName[0].toUpperCase();
+            document.getElementById('userInitial').innerText = displayName[0] ? displayName[0].toUpperCase() : 'U';
             showTab('dashboard');
         };
 

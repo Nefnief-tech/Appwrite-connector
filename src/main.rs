@@ -4,7 +4,7 @@ mod db;
 mod handlers;
 mod models;
 
-use actix_web::{web, App, HttpServer, middleware};
+use actix_web::{web, App, HttpServer, middleware, HttpResponse};
 use actix_files as fs;
 use actix_cors::Cors;
 use config::Config;
@@ -71,6 +71,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(middleware::Logger::default())
             .wrap(cors)
             // Appwrite Emulator API
+            .service(ping)
             .service(get_account)
             .service(register_account)
             .service(create_session)
@@ -91,10 +92,12 @@ async fn main() -> std::io::Result<()> {
             .service(toggle_under_attack)
             .service(get_db_status)
             .service(list_redis_mirrors)
+            .service(add_redis_mirror)
             .service(toggle_load_balancer)
             .service(reroll_key)
             .service(wipe_database)
             .service(fs::Files::new("/console", "./").index_file("test_app.html"))
+            .default_service(web::to(|| async { HttpResponse::NotFound().body("Standalone Emulator: Route not found") }))
     })
     .bind((config.host, config.port))?
     .run()

@@ -28,7 +28,7 @@ impl Config {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .collect();
-        
+
         // Try to load key from keys.json first
         let encryption_key = if let Ok(ks) = KeyStore::load() {
             hex::decode(&ks.current_key).expect("Key in keys.json must be valid hex")
@@ -36,7 +36,7 @@ impl Config {
             // Fallback to .env and migrate to keys.json
             let key_hex = env::var("ENCRYPTION_KEY").expect("ENCRYPTION_KEY must be set if keys.json is missing");
             let key_bytes = hex::decode(&key_hex).expect("ENCRYPTION_KEY must be valid hex");
-            
+
             let ks = KeyStore {
                 current_key: key_hex,
                 previous_keys: Vec::new(),

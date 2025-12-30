@@ -73,7 +73,6 @@ async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<St
     }
     
     if token.is_none() {
-        // Appwrite SDKs use a_session_<projectId>
         if let Some(project_id) = req.headers().get("x-appwrite-project").and_then(|h| h.to_str().ok()) {
             let cookie_name = format!("a_session_{}", project_id);
             token = req.cookie(&cookie_name).map(|c| c.value().to_string());
@@ -89,31 +88,12 @@ async fn get_user_from_session(req: &HttpRequest, state: &AppState) -> Option<St
 
     let token_val = match token {
         Some(t) => t,
-        None => {
-            log::debug!("No session token found in headers or cookies");
-            return None;
-        }
+        None => return None
     };
 
-    let mut conn = match state.redis.get_async_connection().await {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("Redis connection error in session check: {}", e);
-            return None;
-        }
-    };
-
+    let mut conn = state.redis.get_async_connection().await.ok()?;
     let key = format!("session:{}", token_val);
-    match conn.get::<_, String>(key).await {
-        Ok(user_id) => {
-            log::debug!("Session verified for user: {}", user_id);
-            Some(user_id)
-        },
-        Err(_) => {
-            log::warn!("Session token not found in Redis: {}", token_val);
-            None
-        }
-    }
+    conn.get::<_, String>(key).await.ok()
 }
 
 // --- Appwrite API Implementation ---
@@ -157,8 +137,6 @@ pub async fn register_account(
     state: web::Data<AppState>,
 ) -> impl Responder {
     state.total_requests.fetch_add(1, Ordering::Relaxed);
-    log::debug!("Registration request body: {:?}", data);
-    
     let name = data["name"].as_str().unwrap_or("unknown");
     let password = data["password"].as_str().unwrap_or("");
     let email = data["email"].as_str().unwrap_or("");
@@ -171,7 +149,6 @@ pub async fn register_account(
     };
 
     if email.is_empty() || password.is_empty() {
-        log::warn!("Registration failed: email or password empty. Body: {:?}", data);
         return HttpResponse::BadRequest().body("Missing email or password");
     }
 
@@ -181,7 +158,13 @@ pub async fn register_account(
     };
 
     let crypto = CryptoService::new(state.crypto_key.read().await.clone());
-    let encrypted_hash = crypto.encrypt(hashed_password.as_bytes()).unwrap();
+    let encrypted_hash = match crypto.encrypt(hashed_password.as_bytes()) {
+        Ok(h) => h,
+        Err(e) => {
+            log::error!("Encryption failed during registration: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
 
     let res = sqlx::query("INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)")
         .bind(&user_id)
@@ -212,7 +195,6 @@ pub async fn register_account(
             status: true,
         })
     } else {
-        log::error!("Registration DB error: {:?}", res.err());
         HttpResponse::BadRequest().body("User or email already exists")
     }
 }
@@ -227,11 +209,8 @@ pub async fn create_session(
     let email_input = data["email"].as_str().unwrap_or("");
     let password = data["password"].as_str().unwrap_or("");
     
-    // Support both full email and just username
     let email = if email_input.contains('@') { email_input.to_string() } else { format!("{}@local.system", email_input) };
     
-    log::debug!("Login attempt for identifier: {}", email);
-
     let row = sqlx::query("SELECT id, password_hash FROM users WHERE email = $1 OR username = $2")
         .bind(&email)
         .bind(email_input)
@@ -283,17 +262,13 @@ pub async fn create_session(
                                 });
                         }
                     },
-                    Ok(false) => log::warn!("Invalid password for email: {}", email),
+                    Ok(false) => log::warn!("Invalid password for identifier: {}", email),
                     Err(e) => log::error!("Bcrypt verify error: {}", e),
                 }
-            } else {
-                log::error!("Hash decryption failed during login for email: {}. Current key might be out of sync.", email);
             }
         },
-        Ok(None) => log::warn!("User not found for email: {}", email),
-        Err(e) => log::error!("Database error during login query: {}", e),
+        _ => log::warn!("Auth failed for identifier: {}", email),
     }
-    
     HttpResponse::Unauthorized().body("Invalid credentials")
 }
 
@@ -307,8 +282,9 @@ pub async fn delete_session(
         .map(|s| s.to_string());
 
     if let Some(t) = token {
-        let mut conn = state.redis.get_async_connection().await.unwrap();
-        let _: () = conn.del(format!("session:{}", t)).await.unwrap();
+        if let Ok(mut conn) = state.redis.get_async_connection().await {
+            let _: () = conn.del(format!("session:{}", t)).await.unwrap_or_default();
+        }
     }
     HttpResponse::NoContent().finish()
 }
@@ -336,7 +312,6 @@ pub async fn get_document(
     let redis_key = format!("data:{}:{}", user_id, doc_id);
     let lb_enabled = state.load_balancer_mode.load(Ordering::Relaxed);
 
-    // Redis Read with LB
     let mut cached_val: Option<String> = None;
     if lb_enabled {
         let mirrors = state.redis_mirrors.read().await;
@@ -363,14 +338,13 @@ pub async fn get_document(
                 id: doc_id,
                 collection_id: col_id,
                 database_id: db_id,
-                created_at: Utc::now().to_rfc3339(), // Placeholder
+                created_at: Utc::now().to_rfc3339(),
                 updated_at: Utc::now().to_rfc3339(),
                 data,
             });
         }
     }
 
-    // Postgres Fallback
     let row = sqlx::query("SELECT encrypted_content, created_at FROM data_store WHERE id = $1 AND user_id = $2")
         .bind(Uuid::parse_str(&doc_id).unwrap_or_default())
         .bind(&user_id)
@@ -479,9 +453,12 @@ pub async fn create_document(
         obj.remove("$permissions");
     }
     
-    let payload_str = serde_json::to_string(&payload).unwrap();
+    let payload_str = serde_json::to_string(&payload).unwrap_or_default();
     let crypto = CryptoService::new(state.crypto_key.read().await.clone());
-    let encrypted = crypto.encrypt(payload_str.as_bytes()).unwrap();
+    let encrypted = match crypto.encrypt(payload_str.as_bytes()) {
+        Ok(enc) => enc,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
 
     let internal_id = Uuid::new_v4();
     let res = sqlx::query("INSERT INTO data_store (id, database_id, collection_id, user_id, encrypted_content) VALUES ($1, $2, $3, $4, $5)")
@@ -533,7 +510,6 @@ pub async fn delete_document(
         Err(_) => return HttpResponse::BadRequest().body("Invalid document ID format"),
     };
 
-    // 1. Delete from Primary Postgres
     let res = sqlx::query("DELETE FROM data_store WHERE id = $1 AND user_id = $2")
         .bind(id_uuid)
         .bind(&user_id)
@@ -542,29 +518,23 @@ pub async fn delete_document(
 
     match res {
         Ok(r) if r.rows_affected() > 0 => {
-            // 2. Delete from Mirrors
-            {
-                let mirrors = state.mirrors.read().await;
-                for mirror in mirrors.iter() {
-                    let _ = sqlx::query("DELETE FROM data_store WHERE id = $1 AND user_id = $2")
-                        .bind(id_uuid)
-                        .bind(&user_id)
-                        .execute(mirror)
-                        .await;
-                }
+            let mirrors = state.mirrors.read().await;
+            for mirror in mirrors.iter() {
+                let _ = sqlx::query("DELETE FROM data_store WHERE id = $1 AND user_id = $2")
+                    .bind(id_uuid)
+                    .bind(&user_id)
+                    .execute(mirror)
+                    .await;
             }
 
-            // 3. Delete from Redis Cache (and mirrors)
             let redis_key = format!("data:{}:{}", user_id, doc_id);
             if let Ok(mut conn) = state.redis.get_async_connection().await {
                 let _: () = conn.del(&redis_key).await.unwrap_or_default();
             }
-            {
-                let redis_mirrors = state.redis_mirrors.read().await;
-                for mirror in redis_mirrors.iter() {
-                    if let Ok(mut conn) = mirror.get_async_connection().await {
-                        let _: () = conn.del(&redis_key).await.unwrap_or_default();
-                    }
+            let redis_mirrors = state.redis_mirrors.read().await;
+            for mirror in redis_mirrors.iter() {
+                if let Ok(mut conn) = mirror.get_async_connection().await {
+                    let _: () = conn.del(&redis_key).await.unwrap_or_default();
                 }
             }
 
@@ -586,7 +556,6 @@ pub async fn wipe_database(
 
     let tables = vec!["data_store", "users", "user_profiles", "registered_databases", "registered_redis"];
 
-    // 1. Clear Database Tables (Mirrors FIRST while we still have them in the registry list)
     {
         let mirrors = state.mirrors.read().await;
         for mirror in mirrors.iter() {
@@ -597,7 +566,6 @@ pub async fn wipe_database(
         }
     }
 
-    // 2. Clear Database Tables (Primary)
     for table in &tables {
         let query = format!("TRUNCATE TABLE {} CASCADE", table);
         if let Err(e) = sqlx::query(&query).execute(&state.db).await {
@@ -605,18 +573,15 @@ pub async fn wipe_database(
         }
     }
 
-    // 3. Reset default roles (Primary)
-    let _ = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{\"data:read\", \"data:write\", \"roles:manage\"}'), ('user', '{\"data:read\", \"data:write\"}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(&state.db).await;
+    let _ = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{{\"data:read\", \"data:write\", \"roles:manage\"}}'), ('user', '{{\"data:read\", \"data:write\"}}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(&state.db).await;
 
-    // 4. Reset default roles (Mirrors)
     {
         let mirrors = state.mirrors.read().await;
         for mirror in mirrors.iter() {
-            let _ = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{\"data:read\", \"data:write\", \"roles:manage\"}'), ('user', '{\"data:read\", \"data:write\"}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(mirror).await;
+            let _ = sqlx::query("INSERT INTO roles_definition (name, permissions) VALUES ('admin', '{{\"data:read\", \"data:write\", \"roles:manage\"}}'), ('user', '{{\"data:read\", \"data:write\"}}') ON CONFLICT (name) DO UPDATE SET permissions = EXCLUDED.permissions").execute(mirror).await;
         }
     }
 
-    // 5. Clear Redis
     if let Ok(mut conn) = state.redis.get_async_connection().await {
         let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap_or_default();
     }
@@ -636,11 +601,9 @@ pub async fn wipe_database(
 pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
     log::info!("Starting atomic master key reroll process...");
     
-    // Acquire WRITE lock for the entire duration to prevent any other encryption/decryption
     let mut key_lock = state.crypto_key.write().await;
     let old_key = key_lock.clone();
     
-    // 1. Fetch all data
     let data_rows = sqlx::query("SELECT id, database_id, collection_id, user_id, encrypted_content FROM data_store").fetch_all(&state.db).await?;
     let user_rows = sqlx::query("SELECT id, username, email, password_hash FROM users").fetch_all(&state.db).await?;
 
@@ -648,7 +611,6 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
     let new_key = CryptoService::generate_key();
     let new_crypto = CryptoService::new(new_key.clone());
 
-    // 2. Pre-verify and re-encrypt everything in memory
     log::info!("Verifying and re-encrypting data in memory...");
     
     let mut new_data_payloads = Vec::new();
@@ -675,7 +637,6 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
         new_user_payloads.push((id, new_enc));
     }
 
-    // 3. Commit to database
     log::info!("Verification successful. Committing to database...");
     let mut tx = state.db.begin().await?;
 
@@ -697,12 +658,10 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
 
     tx.commit().await?;
 
-    // 4. Update mirrors
     {
         let mirrors = state.mirrors.read().await;
         log::info!("Updating {} mirrors with new encrypted data...", mirrors.len());
         for mirror in mirrors.iter() {
-            // Update data_store on mirror
             for (id, new_enc) in &new_data_payloads {
                 let _ = sqlx::query("UPDATE data_store SET encrypted_content = $1 WHERE id = $2")
                     .bind(new_enc)
@@ -710,7 +669,6 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
                     .execute(mirror)
                     .await;
             }
-            // Update users on mirror
             for (id, new_enc) in &new_user_payloads {
                 let _ = sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
                     .bind(new_enc)
@@ -721,7 +679,6 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
         }
     }
 
-    // 5. Update local state and files
     *key_lock = new_key.clone();
     let new_hex = hex::encode(new_key);
     
@@ -738,7 +695,6 @@ pub async fn reroll_key_logic(state: &AppState) -> anyhow::Result<()> {
 
     let _ = update_env_file("ENCRYPTION_KEY", &new_hex);
 
-    // 6. Flush Redis on all nodes
     log::info!("Invalidating encrypted data in Redis caches...");
     let clear_script = "for i, name in ipairs(redis.call('KEYS', 'data:*')) do redis.call('DEL', name) end";
     if let Ok(mut conn) = state.redis.get_async_connection().await {
@@ -760,24 +716,30 @@ fn update_env_file(key: &str, value: &str) -> std::io::Result<()> {
     let content = fs::read_to_string(".env").unwrap_or_default();
     let mut new_content = String::new();
     let mut found = false;
-    let prefix = format!("{}=", key);
+    let prefix = format!("{} =", key);
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with(&prefix) {
             if !found {
-                new_content.push_str(&format!("{}={}\n", key, value));
+                new_content.push_str(&format!("{} = {}
+", key, value));
                 found = true;
             }
-            // Skip subsequent duplicates of the same key
         } else {
             new_content.push_str(line);
             new_content.push_str("\n");
         }
     }
     if !found {
-        new_content.push_str(&format!("{}={}\n", key, value));
+        new_content.push_str(&format!("{} = {}
+", key, value));
     }
     fs::write(".env", new_content)
+}
+
+#[get("/v1/ping")]
+pub async fn ping() -> impl Responder {
+    HttpResponse::Ok().body("pong")
 }
 
 #[get("/admin/users")]
@@ -817,7 +779,10 @@ pub async fn list_roles(req: HttpRequest, state: web::Data<AppState>) -> impl Re
     }
     let rows = sqlx::query("SELECT name, permissions FROM roles_definition").fetch_all(&state.db).await;
     match rows {
-        Ok(rows) => HttpResponse::Ok().json(rows.iter().map(|r| RoleDefinition { name: r.get("name"), permissions: r.get("permissions") }).collect::<Vec<_>>()),
+        Ok(rows) => HttpResponse::Ok().json(rows.iter().map(|r| RoleDefinition { 
+            name: r.get("name"), 
+            permissions: r.get::<Vec<String>, _>("permissions") 
+        }).collect::<Vec<_>>()),
         Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
     }
 }
@@ -898,12 +863,87 @@ pub async fn get_db_status(req: HttpRequest, state: web::Data<AppState>) -> impl
 #[get("/admin/redis")]
 pub async fn list_redis_mirrors(req: HttpRequest, state: web::Data<AppState>) -> impl Responder {
     if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
-    HttpResponse::Ok().json(vec![DatabaseStatus {
-        name: "Local Cache".to_string(),
+    
+    let mut statuses = Vec::new();
+
+    // 1. Primary Redis
+    let mut primary_conn = state.redis.get_async_connection().await;
+    let primary_online = match &mut primary_conn {
+        Ok(c) => redis::cmd("PING").query_async::<_, String>(c).await.is_ok(),
+        Err(_) => false,
+    };
+    
+    statuses.push(DatabaseStatus {
+        name: "Primary Redis".to_string(),
         url: "PROTECTED".to_string(),
-        online: true,
+        online: primary_online,
         is_mirror: false,
-    }])
+    });
+
+    // 2. Mirror Redis from DB
+    let mirrors = sqlx::query("SELECT name, url FROM registered_redis")
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+    for row in mirrors {
+        let name: String = row.get("name");
+        let url: String = row.get("url");
+        
+        let mut client = crate::db::init_redis(&url);
+        let online = match &mut client {
+            Ok(c) => {
+                if let Ok(mut conn) = c.get_async_connection().await {
+                    redis::cmd("PING").query_async::<_, String>(&mut conn).await.is_ok()
+                } else { false }
+            },
+            Err(_) => false,
+        };
+
+        statuses.push(DatabaseStatus {
+            name,
+            url,
+            online,
+            is_mirror: true,
+        });
+    }
+
+    HttpResponse::Ok().json(statuses)
+}
+
+#[post("/admin/redis")]
+pub async fn add_redis_mirror(
+    req: HttpRequest,
+    data: web::Json<DatabaseConfig>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    if !validate_api_key(&req, &state) { return HttpResponse::Unauthorized().finish(); }
+
+    // 1. Try to connect
+    let client = match crate::db::init_redis(&data.url) {
+        Ok(c) => c,
+        Err(e) => return HttpResponse::BadRequest().body(format!("Invalid Redis URL: {}", e)),
+    };
+
+    if let Err(e) = client.get_async_connection().await {
+        return HttpResponse::BadRequest().body(format!("Failed to connect to Redis: {}", e));
+    }
+
+    // 2. Persist
+    let res = sqlx::query("INSERT INTO registered_redis (name, url) VALUES ($1, $2)")
+        .bind(&data.name)
+        .bind(&data.url)
+        .execute(&state.db)
+        .await;
+
+    match res {
+        Ok(_) => {
+            let mut mirrors = state.redis_mirrors.write().await;
+            mirrors.push(client);
+            HttpResponse::Ok().json(MessageResponse { message: "Redis mirror added".to_string() })
+        },
+        Err(e) => HttpResponse::InternalServerError().body(format!("Database error: {}", e)),
+    }
 }
 
 #[post("/admin/security/load-balancer")]
