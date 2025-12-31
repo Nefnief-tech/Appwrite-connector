@@ -48,6 +48,7 @@ pub struct UserSummary {
     pub id: String,
     pub username: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub status: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, sqlx::FromRow)]
@@ -90,6 +91,7 @@ pub struct AppwriteUser {
     pub name: String,
     pub email: String,
     pub status: bool,
+    pub emailVerification: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -147,4 +149,102 @@ pub struct SecurityStatus {
     pub under_attack: bool,
     pub load_balancer_mode: bool,
     pub redis_mirrors_count: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, sqlx::FromRow)]
+pub struct S3Config {
+    pub provider: String, // 's3' or 'local'
+    pub bucket: String,
+    pub region: String,
+    pub access_key: String,
+    pub secret_key: String,
+    pub endpoint: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, sqlx::FromRow)]
+pub struct FileMetadata {
+    #[serde(rename = "$id")]
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+    pub user_id: String,
+    #[serde(rename = "$createdAt")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, sqlx::FromRow)]
+pub struct SmtpConfig {
+    pub host: String,
+    pub port: i32,
+    pub username: String,
+    pub password: String,
+    pub from_email: String,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, sqlx::FromRow)]
+pub struct AppwriteFunction {
+    #[serde(rename = "$id")]
+    pub id: String,
+    #[serde(rename = "$createdAt")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(rename = "$updatedAt")]
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub name: String,
+    pub runtime: String, // e.g., "node-18.0", "python-3.10"
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, sqlx::FromRow)]
+pub struct AppwriteExecution {
+    #[serde(rename = "$id")]
+    pub id: String,
+    #[serde(rename = "functionId")]
+    pub function_id: String,
+    #[serde(rename = "$createdAt")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub status: String, // "waiting", "processing", "completed", "failed"
+    #[serde(rename = "stdout")]
+    pub stdout: String,
+    #[serde(rename = "stderr")]
+    pub stderr: String,
+    pub duration: f64,
+    #[serde(rename = "statusCode")]
+    pub status_code: i32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, sqlx::FromRow)]
+pub struct AppwriteWebsite {
+    #[serde(rename = "$id")]
+    pub id: String,
+    #[serde(rename = "$createdAt")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub name: String,
+    pub domain: Option<String>,
+    pub enabled: bool,
+    #[serde(rename = "containerId")]
+    pub container_id: Option<String>,
+    pub port: Option<i32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, sqlx::FromRow)]
+pub struct TrafficLog {
+    pub id: i32,
+    pub website_id: String,
+    pub ip: String,
+    pub method: String,
+    pub path: String,
+    pub status_code: i32,
+    pub latency_ms: i64,
+    pub bytes_sent: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }

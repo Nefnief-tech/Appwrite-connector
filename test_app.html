@@ -65,11 +65,29 @@
                 <div onclick="showTab('roles')" id="nav-roles" class="sidebar-item p-3 px-4 flex items-center gap-3 cursor-pointer">
                     <i class="bi bi-key"></i> RBAC Settings
                 </div>
+                <div onclick="showTab('storage')" id="nav-storage" class="sidebar-item p-3 px-4 flex items-center gap-3 cursor-pointer">
+                    <i class="bi bi-clouds"></i> Encrypted Storage
+                </div>
+                <div onclick="showTab('functions')" id="nav-functions" class="sidebar-item p-3 px-4 flex items-center gap-3 cursor-pointer">
+                    <i class="bi bi-code-square"></i> Appwrite Functions
+                </div>
+                <div onclick="showTab('websites')" id="nav-websites" class="sidebar-item p-3 px-4 flex items-center gap-3 cursor-pointer">
+                    <i class="bi bi-browser-safari"></i> Websites
+                </div>
+                <div onclick="showTab('waf')" id="nav-waf" class="sidebar-item p-3 px-4 flex items-center gap-3 cursor-pointer">
+                    <i class="bi bi-shield-check"></i> WAF & Proxy
+                </div>
                 <div onclick="showTab('infra')" id="nav-infra" class="sidebar-item p-3 px-4 flex items-center gap-3 cursor-pointer">
                     <i class="bi bi-hdd-network"></i> Infrastructure
                 </div>
                 <div onclick="showTab('security')" id="nav-security" class="sidebar-item p-3 px-4 flex items-center gap-3 cursor-pointer">
                     <i class="bi bi-shield-lock"></i> Security
+                </div>
+                <div onclick="showTab('logs')" id="nav-logs" class="sidebar-item p-3 px-4 flex items-center gap-3 cursor-pointer">
+                    <i class="bi bi-terminal"></i> System Logs
+                </div>
+                <div onclick="showTab('smtp')" id="nav-smtp" class="sidebar-item p-3 px-4 flex items-center gap-3 cursor-pointer">
+                    <i class="bi bi-envelope-at"></i> SMTP Settings
                 </div>
             </nav>
 
@@ -178,7 +196,9 @@
                             <tr>
                                 <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Username</th>
                                 <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Created</th>
-                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px] text-right">ID</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Status</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">ID</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px] text-right">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="userListFull" class="divide-y divide-slate-800"></tbody>
@@ -210,6 +230,193 @@
                             <div id="roleCheckboxes" class="grid grid-cols-2 gap-2"></div>
                             <button onclick="saveAssignment()" class="w-full bg-white text-black py-2.5 rounded-xl font-bold text-sm mt-4 hover:bg-slate-200">Save Policy</button>
                         </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab: Storage -->
+            <section id="tab-storage" class="hidden space-y-8">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <h1 class="text-3xl font-bold text-white tracking-tight">Encrypted Storage</h1>
+                        <p class="text-slate-500 mt-1">Manage files and S3 bucket configuration.</p>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="openModal('s3Modal')" class="bg-slate-800 hover:bg-slate-700 px-5 py-2.5 rounded-xl font-bold text-sm">S3 Config</button>
+                        <button onclick="document.getElementById('fileInput').click()" class="btn-primary px-5 py-2.5 rounded-xl font-bold text-sm">Upload File</button>
+                        <input type="file" id="fileInput" class="hidden" onchange="handleFileUpload(this)">
+                    </div>
+                </div>
+
+                <div class="card-glass overflow-hidden">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-900/50 border-b border-slate-800">
+                            <tr>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">File Name</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Type</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Size</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Uploaded</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px] text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fileList" class="divide-y divide-slate-800">
+                            <!-- Files will be here -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Tab: Functions -->
+            <section id="tab-functions" class="hidden space-y-8">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <h1 class="text-3xl font-bold text-white tracking-tight">Appwrite Functions</h1>
+                        <p class="text-slate-500 mt-1">Manage and execute serverless logic locally.</p>
+                    </div>
+                    <button onclick="openModal('functionModal')" class="btn-primary px-5 py-2.5 rounded-xl font-bold text-sm">Create Function</button>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div class="lg:col-span-1 space-y-4">
+                        <h3 class="font-bold text-sm text-slate-500 uppercase tracking-widest px-2">Registered Functions</h3>
+                        <div id="functionList" class="space-y-2">
+                            <!-- Functions will be listed here -->
+                        </div>
+                    </div>
+                    <div class="lg:col-span-2 card-glass overflow-hidden flex flex-col h-[calc(100vh-250px)]">
+                        <div class="p-4 border-b border-slate-800 bg-slate-900/30 flex justify-between items-center">
+                            <h3 class="font-bold text-sm" id="executionTitle">Executions</h3>
+                            <div class="flex gap-2">
+                                <button onclick="document.getElementById('codeUpload').click()" id="uploadCodeBtn" class="hidden bg-slate-800 hover:bg-slate-700 px-4 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2">
+                                    <i class="bi bi-upload"></i> Upload Zip
+                                </button>
+                                <button onclick="promptGitClone()" id="gitCloneBtn" class="hidden bg-slate-800 hover:bg-slate-700 px-4 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2">
+                                    <i class="bi bi-git"></i> Git Clone
+                                </button>
+                                <button id="runFunctionBtn" class="hidden bg-green-600 hover:bg-green-700 px-4 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2">
+                                    <i class="bi bi-play-fill"></i> Execute Now
+                                </button>
+                                <input type="file" id="codeUpload" class="hidden" accept=".zip" onchange="handleCodeUpload(this)">
+                            </div>
+                        </div>
+                        <div id="executionList" class="flex-1 overflow-y-auto divide-y divide-slate-800">
+                            <div class="p-12 text-center text-slate-500 italic">Select a function to view its execution history.</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab: Websites -->
+            <section id="tab-websites" class="hidden space-y-8">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <h1 class="text-3xl font-bold text-white tracking-tight">Website Hosting</h1>
+                        <p class="text-slate-500 mt-1">Deploy and host static websites locally.</p>
+                    </div>
+                    <button onclick="openModal('websiteModal')" class="btn-primary px-5 py-2.5 rounded-xl font-bold text-sm">Create Website</button>
+                </div>
+
+                <div class="card-glass overflow-hidden">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-900/50 border-b border-slate-800">
+                            <tr>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Website Name</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Site ID</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Public URL</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px] text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="websiteList" class="divide-y divide-slate-800">
+                            <!-- Websites list will be here -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Tab: WAF & Security -->
+            <section id="tab-waf" class="hidden space-y-8">
+                <div>
+                    <h1 class="text-3xl font-bold text-white tracking-tight">WAF & Security Shield</h1>
+                    <p class="text-slate-500 mt-1">Real-time firewall monitoring and reverse proxy handling.</p>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <div class="card-glass p-6 space-y-6">
+                        <h3 class="font-bold flex items-center gap-2">
+                            <i class="bi bi-shield-lock-fill text-blue-500"></i>
+                            WAF Status
+                        </h3>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="p-4 bg-slate-900/50 rounded-xl border border-slate-800">
+                                <div class="text-[10px] text-slate-500 uppercase font-bold mb-1">State</div>
+                                <div class="text-green-500 font-bold">ACTIVE</div>
+                            </div>
+                            <div class="p-4 bg-slate-900/50 rounded-xl border border-slate-800">
+                                <div class="text-[10px] text-slate-500 uppercase font-bold mb-1">Protection Level</div>
+                                <div class="text-white font-bold">Strict</div>
+                            </div>
+                        </div>
+                        <div class="p-4 bg-blue-600/5 border border-blue-500/20 rounded-xl text-xs text-blue-400">
+                            The WAF is currently filtering all incoming traffic for SQLi, XSS, and path traversal attempts.
+                        </div>
+                    </div>
+
+                    <div class="card-glass p-6 space-y-4">
+                        <h3 class="font-bold flex items-center gap-2">
+                            <i class="bi bi-hdd-network-fill text-purple-500"></i>
+                            Reverse Proxy Core
+                        </h3>
+                        <p class="text-xs text-slate-500">All traffic through <code>/sites/*</code> is being reverse-proxied to isolated Docker containers with header synchronization.</p>
+                        <div class="p-4 bg-slate-950 rounded-xl border border-slate-800 font-mono text-[10px] text-slate-400">
+                            GET /sites/unique() -> http://127.0.0.1:CONTAINER_PORT
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card-glass overflow-hidden">
+                    <div class="p-4 border-b border-slate-800 bg-slate-900/30 flex justify-between items-center">
+                        <h3 class="font-bold text-sm">Firewall Logs</h3>
+                        <button onclick="loadWafLogs()" class="text-[10px] font-bold text-blue-400 hover:text-blue-300 uppercase tracking-widest">Refresh Logs</button>
+                    </div>
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-900/50">
+                            <tr>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Time</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Source IP</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Path</th>
+                                <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Violation</th>
+                            </tr>
+                        </thead>
+                        <tbody id="wafLogList" class="divide-y divide-slate-800 font-mono text-[11px]">
+                            <tr><td colspan="4" class="p-8 text-center text-slate-500 italic">No security violations recorded.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="card-glass overflow-hidden">
+                    <div class="p-4 border-b border-slate-800 bg-slate-900/30 flex justify-between items-center">
+                        <h3 class="font-bold text-sm text-white">Live Traffic Stream</h3>
+                        <div class="flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                            <span class="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Active Monitoring</span>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm">
+                            <thead class="bg-slate-900/50">
+                                <tr>
+                                    <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Method</th>
+                                    <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Path</th>
+                                    <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Status</th>
+                                    <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Latency</th>
+                                    <th class="p-4 font-bold text-slate-500 uppercase text-[10px]">Source IP</th>
+                                    <th class="p-4 font-bold text-slate-500 uppercase text-[10px] text-right">Site</th>
+                                </tr>
+                            </thead>
+                            <tbody id="trafficLiveList" class="divide-y divide-slate-800 font-mono text-[11px]">
+                                <tr><td colspan="6" class="p-8 text-center text-slate-500 italic text-xs">Awaiting proxied traffic data...</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </section>
@@ -315,6 +522,10 @@
                             <i class="bi bi-trash3-fill"></i>
                             Wipe System Data
                         </button>
+                        <button onclick="restartServer()" class="w-full py-3 mt-4 bg-blue-900/20 text-blue-400 border border-blue-900/30 rounded-2xl font-bold hover:bg-blue-900/40 transition-all flex items-center justify-center gap-2">
+                            <i class="bi bi-arrow-clockwise"></i>
+                            Restart Server Process
+                        </button>
                     </div>
 
                     <div class="card-glass p-8 border-red-500/20 bg-red-500/5">
@@ -339,6 +550,31 @@
                         <button id="attackBtn" onclick="toggleAttackMode()" class="w-full py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-red-900/20">
                             <i class="bi bi-exclamation-triangle-fill"></i>
                             Toggle Under Attack Mode
+                        </button>
+                    </div>
+
+                    <div class="card-glass p-8 border-orange-500/20 bg-orange-500/5">
+                        <div class="flex items-start gap-4 mb-6">
+                            <div class="w-12 h-12 rounded-2xl bg-orange-500/20 text-orange-500 flex items-center justify-center shrink-0">
+                                <i class="bi bi-lock-fill text-xl"></i>
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-lg text-white">Maintenance Lockdown</h3>
+                                <p class="text-sm text-slate-400 mt-1">Block all public traffic while keeping this dashboard open.</p>
+                            </div>
+                        </div>
+                        
+                        <div class="p-5 bg-slate-950 rounded-2xl border border-slate-800 mb-6">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="text-sm font-bold text-white">Lockdown State</span>
+                                <div id="lockdownStatus" class="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-500">INACTIVE</div>
+                            </div>
+                            <p class="text-[10px] text-slate-500 leading-relaxed">When active, all requests to <code>/sites/*</code> and public Appwrite APIs are rejected. This console remains accessible for administrators.</p>
+                        </div>
+
+                        <button id="lockdownBtn" onclick="toggleLockdown()" class="w-full py-4 bg-orange-600 text-white rounded-2xl font-bold hover:bg-orange-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-orange-900/20">
+                            <i class="bi bi-shield-lock-fill"></i>
+                            Toggle System Lockdown
                         </button>
                     </div>
 
@@ -391,6 +627,64 @@
                             </div>
                         </div>
                     </div>
+                </div>
+            </section>
+
+            <!-- Tab: Logs -->
+            <section id="tab-logs" class="hidden space-y-6">
+                <div class="flex justify-between items-end">
+                    <div>
+                        <h1 class="text-3xl font-bold text-white tracking-tight">System Logs</h1>
+                        <p class="text-slate-500 mt-1">Real-time internal activity and audit trails.</p>
+                    </div>
+                    <button onclick="clearLogs()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-bold transition-all">
+                        Clear View
+                    </button>
+                </div>
+                <div id="logContainer" class="card-glass p-4 font-mono text-[11px] h-[calc(100vh-250px)] overflow-y-auto space-y-1 bg-black/40">
+                    <!-- Logs will appear here -->
+                </div>
+            </section>
+
+            <!-- Tab: SMTP -->
+            <section id="tab-smtp" class="hidden space-y-8">
+                <div>
+                    <h1 class="text-3xl font-bold text-white tracking-tight">SMTP Configuration</h1>
+                    <p class="text-slate-500 mt-1">Configure outgoing mail server for account verifications.</p>
+                </div>
+
+                <div class="card-glass p-8 max-w-2xl space-y-6">
+                    <div class="grid grid-cols-2 gap-6">
+                        <div class="space-y-2">
+                            <label class="text-xs font-bold text-slate-500 uppercase">SMTP Host</label>
+                            <input type="text" id="smtpHost" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none focus:border-blue-500" placeholder="smtp.gmail.com">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-xs font-bold text-slate-500 uppercase">SMTP Port</label>
+                            <input type="number" id="smtpPort" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none focus:border-blue-500" placeholder="587">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-xs font-bold text-slate-500 uppercase">Username</label>
+                            <input type="text" id="smtpUser" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none focus:border-blue-500">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-xs font-bold text-slate-500 uppercase">Password</label>
+                            <input type="password" id="smtpPass" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none focus:border-blue-500">
+                        </div>
+                        <div class="col-span-2 space-y-2">
+                            <label class="text-xs font-bold text-slate-500 uppercase">From Email Address</label>
+                            <input type="email" id="smtpFrom" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none focus:border-blue-500" placeholder="no-reply@yourdomain.com">
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-3 p-4 bg-blue-500/5 border border-blue-500/20 rounded-2xl">
+                        <input type="checkbox" id="smtpEnabled" class="w-4 h-4 rounded border-slate-800 bg-slate-900 text-blue-600">
+                        <label for="smtpEnabled" class="text-sm font-medium text-slate-300">Enable SMTP for Email Verification</label>
+                    </div>
+
+                    <button onclick="saveSmtpConfig()" class="w-full btn-primary py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/20">
+                        Save SMTP Settings
+                    </button>
                 </div>
             </section>
         </main>
@@ -463,6 +757,122 @@
                 <button onclick="addRedisMirror()" class="btn-primary px-6 py-2 rounded-xl text-sm font-bold">Connect Mirror</button>
             </div>
         </div>
+        <div id="s3Modal" class="modal-box card-glass bg-slate-950 w-full max-w-lg p-8 hidden flex flex-col gap-6 shadow-2xl">
+            <h3 class="text-xl font-bold text-white">Storage Configuration</h3>
+            <div class="grid grid-cols-2 gap-4">
+                <div class="col-span-2">
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Storage Provider</label>
+                    <select id="storageProvider" onchange="toggleStorageFields()" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none text-sm">
+                        <option value="local">Local Disk (./storage)</option>
+                        <option value="s3">S3 Compatible Storage</option>
+                    </select>
+                </div>
+                <div class="col-span-2 s3-field">
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Bucket Name</label>
+                    <input type="text" id="s3Bucket" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none" placeholder="my-app-storage">
+                </div>
+                <div class="s3-field">
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Region</label>
+                    <input type="text" id="s3Region" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none" placeholder="us-east-1">
+                </div>
+                <div class="s3-field">
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Endpoint (Optional)</label>
+                    <input type="text" id="s3Endpoint" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none" placeholder="https://s3.amazonaws.com">
+                </div>
+                <div class="col-span-2 s3-field">
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Access Key</label>
+                    <input type="text" id="s3Access" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none">
+                </div>
+                <div class="col-span-2 s3-field">
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Secret Key</label>
+                    <input type="password" id="s3Secret" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none">
+                </div>
+                <div class="col-span-2 flex items-center gap-2 p-3 bg-blue-600/10 rounded-xl">
+                    <input type="checkbox" id="s3Enabled">
+                    <label for="s3Enabled" class="text-xs text-blue-400 font-bold">Enable Storage Provider</label>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3">
+                <button onclick="closeModals()" class="px-5 py-2 rounded-xl hover:bg-slate-900 text-sm font-semibold">Cancel</button>
+                <button onclick="saveS3Config()" class="btn-primary px-6 py-2 rounded-xl text-sm font-bold">Save Configuration</button>
+            </div>
+        </div>
+        <div id="functionModal" class="modal-box card-glass bg-slate-950 w-full max-w-md p-8 hidden flex flex-col gap-6 shadow-2xl">
+            <h3 class="text-xl font-bold text-white">Create Function</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Function Name</label>
+                    <input type="text" id="funcName" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none" placeholder="e.g. Process Order">
+                </div>
+                <div>
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Runtime</label>
+                    <select id="funcRuntime" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none text-sm">
+                        <option value="node-18.0">Node.js 18.0</option>
+                        <option value="python-3.10">Python 3.10</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Function ID (Optional)</label>
+                    <input type="text" id="funcId" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none font-mono text-xs" placeholder="unique()">
+                </div>
+                <div class="p-4 bg-blue-600/10 border border-blue-500/20 rounded-xl">
+                    <p class="text-[10px] text-blue-400">After creation, place your code in <code>./functions/[ID]/index.[js|py]</code></p>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3">
+                <button onclick="closeModals()" class="px-5 py-2 rounded-xl hover:bg-slate-900 text-sm font-semibold">Cancel</button>
+                <button onclick="saveFunction()" class="btn-primary px-6 py-2 rounded-xl text-sm font-bold">Create Function</button>
+            </div>
+        </div>
+        <div id="websiteModal" class="modal-box card-glass bg-slate-950 w-full max-w-md p-8 hidden flex flex-col gap-6 shadow-2xl">
+            <h3 class="text-xl font-bold text-white">Create Website</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Website Name</label>
+                    <input type="text" id="siteName" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none" placeholder="e.g. My Portfolio">
+                </div>
+                <div>
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Website ID (Optional)</label>
+                    <input type="text" id="siteIdInput" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none font-mono text-xs" placeholder="unique()">
+                </div>
+            </div>
+            <div class="flex justify-end gap-3">
+                <button onclick="closeModals()" class="px-5 py-2 rounded-xl hover:bg-slate-900 text-sm font-semibold">Cancel</button>
+                <button onclick="saveWebsite()" class="btn-primary px-6 py-2 rounded-xl text-sm font-bold">Create Website</button>
+            </div>
+        </div>
+        <div id="websiteDomainModal" class="modal-box card-glass bg-slate-950 w-full max-w-lg p-8 hidden flex flex-col gap-6 shadow-2xl">
+            <h3 class="text-xl font-bold text-white">Domain & SSL Settings</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Custom Domain</label>
+                    <input type="text" id="siteDomain" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none" placeholder="example.com">
+                </div>
+                <div class="p-4 bg-yellow-600/5 border border-yellow-500/20 rounded-xl">
+                    <p class="text-[10px] text-yellow-500 font-bold mb-1"><i class="bi bi-info-circle"></i> DNS Configuration</p>
+                    <p class="text-[9px] text-slate-400">Point your domain's A record to this server's IP address. The server will automatically route traffic based on the Host header.</p>
+                </div>
+                <div>
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">SSL Certificate Path (Optional)</label>
+                    <input type="text" id="siteSslCert" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none font-mono text-xs" placeholder="/etc/letsencrypt/live/example.com/fullchain.pem">
+                </div>
+                <div>
+                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">SSL Private Key Path (Optional)</label>
+                    <input type="text" id="siteSslKey" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none font-mono text-xs" placeholder="/etc/letsencrypt/live/example.com/privkey.pem">
+                </div>
+                <div class="pt-2">
+                    <button onclick="provisionSsl()" class="w-full py-3 bg-blue-600/10 text-blue-400 border border-blue-500/20 rounded-xl text-xs font-bold hover:bg-blue-600/20 transition-all flex items-center justify-center gap-2">
+                        <i class="bi bi-shield-check"></i>
+                        Auto-Provision via Let's Encrypt
+                    </button>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3">
+                <button onclick="closeModals()" class="px-5 py-2 rounded-xl hover:bg-slate-900 text-sm font-semibold">Cancel</button>
+                <button onclick="saveWebsiteDomain()" class="btn-primary px-6 py-2 rounded-xl text-sm font-bold">Save Domain Settings</button>
+            </div>
+        </div>
+        <input type="file" id="websiteContentUpload" class="hidden" accept=".zip" onchange="handleWebsiteUpload(this)">
         <!-- Confirmation Modals -->
         <div id="confirmRerollModal" class="modal-box card-glass bg-slate-950 w-full max-w-md p-8 hidden flex flex-col gap-6 shadow-2xl">
             <h3 class="text-xl font-bold text-white">Confirm Key Rotation</h3>
@@ -486,6 +896,54 @@
             <div class="flex justify-end gap-3">
                 <button onclick="closeModals()" class="px-5 py-2 rounded-xl hover:bg-slate-900 text-sm font-semibold">Cancel</button>
                 <button onclick="executeWipe()" class="bg-red-600 text-white px-6 py-2 rounded-xl text-sm font-bold hover:bg-red-700">Wipe Everything</button>
+            </div>
+        </div>
+
+        <!-- Generic Alert Modal -->
+        <div id="genericAlertModal" class="modal-box card-glass bg-slate-950 w-full max-w-md p-8 hidden flex flex-col gap-6 shadow-2xl">
+            <h3 id="alertTitle" class="text-xl font-bold text-white">Notification</h3>
+            <p id="alertMessage" class="text-sm text-slate-400"></p>
+            <div class="flex justify-end">
+                <button onclick="closeModals()" class="btn-primary px-6 py-2 rounded-xl text-sm font-bold">Dismiss</button>
+            </div>
+        </div>
+
+        <!-- Generic Confirm Modal -->
+        <div id="genericConfirmModal" class="modal-box card-glass bg-slate-950 w-full max-w-md p-8 hidden flex flex-col gap-6 shadow-2xl">
+            <h3 id="confirmTitle" class="text-xl font-bold text-white">Are you sure?</h3>
+            <p id="confirmMessage" class="text-sm text-slate-400"></p>
+            <div class="flex justify-end gap-3">
+                <button onclick="closeModals()" class="px-5 py-2 rounded-xl hover:bg-slate-900 text-sm font-semibold">Cancel</button>
+                <button id="confirmActionButton" class="btn-primary px-6 py-2 rounded-xl text-sm font-bold">Confirm</button>
+            </div>
+        </div>
+
+        <!-- Build Log Modal -->
+        <div id="buildLogModal" class="modal-box card-glass bg-slate-950 w-full max-w-4xl p-8 hidden flex flex-col gap-6 shadow-2xl">
+            <div class="flex justify-between items-center">
+                <h3 class="text-xl font-bold text-white">Build & Deployment Logs</h3>
+                <div id="buildStatusBadge" class="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest"></div>
+            </div>
+            <div class="space-y-2">
+                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex justify-between">
+                    <span>Terminal Output</span>
+                    <span id="logTypeHint" class="text-blue-500/50">Combined Stream</span>
+                </div>
+                <pre id="buildUnifiedLog" class="w-full bg-black border border-slate-800 p-6 rounded-xl font-mono text-[11px] text-slate-300 h-96 overflow-auto leading-relaxed shadow-inner"></pre>
+            </div>
+            <div class="flex justify-end">
+                <button onclick="closeModals()" class="btn-primary px-8 py-2.5 rounded-xl text-sm font-bold">Close Console</button>
+            </div>
+        </div>
+
+        <!-- Generic Prompt Modal -->
+        <div id="genericPromptModal" class="modal-box card-glass bg-slate-950 w-full max-w-md p-8 hidden flex flex-col gap-6 shadow-2xl">
+            <h3 id="promptTitle" class="text-xl font-bold text-white">Input Required</h3>
+            <p id="promptMessage" class="text-sm text-slate-400"></p>
+            <input type="text" id="promptInput" class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none focus:border-blue-500 text-sm" placeholder="...">
+            <div class="flex justify-end gap-3">
+                <button onclick="closeModals()" class="px-5 py-2 rounded-xl hover:bg-slate-900 text-sm font-semibold">Cancel</button>
+                <button id="promptActionButton" class="btn-primary px-6 py-2 rounded-xl text-sm font-bold">Submit</button>
             </div>
         </div>
     </div>
@@ -533,7 +991,7 @@
                 if (isReg) {
                     // Registration uses /v1/account
                     await api('/v1/account', 'POST', { name: username, email: email, password, userId: 'unique()' });
-                    alert('Registration successful. Please sign in.');
+                    showAlert('Registration successful. Please sign in.');
                     toggleAuthMode();
                 } else {
                     // Login uses /v1/account/sessions/email
@@ -541,7 +999,7 @@
                     localStorage.setItem('connector_session', JSON.stringify(session));
                     initApp();
                 }
-            } catch(e) { alert(e.message); }
+            } catch(e) { showAlert(e.message, 'Error'); }
         };
 
         const logout = () => { localStorage.removeItem('connector_session'); location.reload(); };
@@ -558,18 +1016,580 @@
             if(t === 'roles') loadRoles();
             if(t === 'infra') loadDbStatus();
             if(t === 'security') loadSecurityStatus();
+            if(t === 'logs') loadLogs();
+            if(t === 'smtp') loadSmtpConfig();
+            if(t === 'functions') loadFunctions();
+            if(t === 'websites') loadWebsites();
+            if(t === 'waf') loadWafLogs();
+            if(t === 'storage') { loadFiles(); loadS3Config(); }
+        };
+
+        const loadWafLogs = async () => {
+            try {
+                // Endpoint to be implemented in handlers.rs
+                const data = await api('/admin/waf/logs');
+                const list = document.getElementById('wafLogList');
+                list.innerHTML = data.map(l => `
+                    <tr>
+                        <td class="p-4 text-slate-500">${new Date(l.created_at).toLocaleString()}</td>
+                        <td class="p-4 text-white">${l.ip}</td>
+                        <td class="p-4 text-blue-400">${l.path}</td>
+                        <td class="p-4"><span class="px-2 py-0.5 rounded bg-red-500/10 text-red-500 font-bold uppercase text-[9px]">${l.violation}</span></td>
+                    </tr>
+                `).join('');
+                if(data.length === 0) list.innerHTML = '<tr><td colspan="4" class="p-8 text-center text-slate-500 italic">No security violations recorded.</td></tr>';
+            } catch(e) { console.error('Load WAF logs failed', e); }
+        };
+
+        const loadWebsites = async () => {
+            try {
+                const data = await api('/v1/websites');
+                const list = document.getElementById('websiteList');
+                list.innerHTML = data.websites.map(s => {
+                    const publicUrl = `${location.protocol}//${location.host}/sites/${s.$id}/`;
+                    return `
+                        <tr class="hover:bg-slate-900/20 transition-all">
+                            <td class="p-4 font-bold text-white">${s.name}</td>
+                            <td class="p-4 text-xs text-slate-500 font-mono">${s.$id}</td>
+                            <td class="p-4">
+                                <a href="${publicUrl}" target="_blank" class="text-blue-400 hover:underline text-xs">${publicUrl}</a>
+                            </td>
+                            <td class="p-4 text-right">
+                                <div class="flex justify-end gap-1">
+                                    <button onclick="triggerWebsiteDomain('${s.$id}', '${s.domain || ''}')" title="Domain & SSL Settings" class="p-2 hover:bg-slate-800 text-slate-500 hover:text-yellow-400 rounded-lg transition-all">
+                                        <i class="bi bi-globe"></i>
+                                    </button>
+                                    <button onclick="triggerWebsiteDocker('${s.$id}')" title="Dockerize & Deploy" class="p-2 hover:bg-slate-800 text-slate-500 hover:text-blue-500 rounded-lg transition-all">
+                                        <i class="bi bi-box-seam"></i>
+                                    </button>
+                                    <button onclick="triggerWebsiteGit('${s.$id}')" title="Clone from Git" class="p-2 hover:bg-slate-800 text-slate-500 hover:text-orange-400 rounded-lg transition-all">
+                                        <i class="bi bi-git"></i>
+                                    </button>
+                                    <button onclick="triggerWebsiteBuild('${s.$id}')" title="Build Website (npm)" class="p-2 hover:bg-slate-800 text-slate-500 hover:text-green-400 rounded-lg transition-all">
+                                        <i class="bi bi-hammer"></i>
+                                    </button>
+                                    <button onclick="triggerWebsiteUpload('${s.$id}')" title="Upload Content (ZIP)" class="p-2 hover:bg-slate-800 text-slate-500 hover:text-blue-400 rounded-lg transition-all">
+                                        <i class="bi bi-cloud-upload"></i>
+                                    </button>
+                                    <button onclick="deleteWebsite('${s.$id}')" title="Delete" class="p-2 hover:bg-red-500/20 text-slate-500 hover:text-red-500 rounded-lg transition-all">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+                if(data.websites.length === 0) list.innerHTML = '<tr><td colspan="4" class="p-8 text-center text-slate-500 italic">No websites deployed.</td></tr>';
+            } catch(e) { console.error('Load websites failed', e); }
+        };
+
+        let activeWebsiteId = null;
+        const triggerWebsiteUpload = (id) => {
+            activeWebsiteId = id;
+            document.getElementById('websiteContentUpload').click();
+        };
+
+        const triggerWebsiteGit = (id) => {
+            showPrompt("Enter Git Repository URL (HTTPS) for your website:", async (url) => {
+                try {
+                    showAlert('Cloning website repository...', 'Git');
+                    await api(`/v1/websites/${id}/git`, 'POST', { url });
+                    showAlert('Repository cloned successfully. You may need to run a Build if it is a Next.js/React project.', 'Success');
+                } catch(e) { showAlert(e.message, 'Git Clone Failed'); }
+            }, "Clone Website Repo", "https://github.com/user/my-nextjs-app.git");
+        };
+
+        const triggerWebsiteBuild = (id) => {
+            showPrompt("Enter build command (run from site root):", async (command) => {
+                try {
+                    showAlert('Building website... Please wait for the output.', 'Build Started');
+                    const res = await api(`/v1/websites/${id}/build`, 'POST', { command });
+                    
+                    const logArea = document.getElementById('buildUnifiedLog');
+                    logArea.innerText = (res.stdout || '') + (res.stderr || '');
+                    if (!logArea.innerText.trim()) logArea.innerText = '(Process completed with no output)';
+                    
+                    const badge = document.getElementById('buildStatusBadge');
+                    if (res.status === 'success') {
+                        badge.innerText = 'SUCCESS';
+                        badge.className = 'px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-green-500/20 text-green-500 border border-green-500/20';
+                    } else {
+                        badge.innerText = 'FAILED';
+                        badge.className = 'px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-red-500/20 text-red-500 border border-red-500/20';
+                    }
+                    
+                    closeModals();
+                    openModal('buildLogModal');
+                } catch(e) { showAlert(e.message, 'Build Trigger Failed'); }
+            }, "Build Website", "npm install && npm run build");
+        };
+
+        const triggerWebsiteDocker = async (id) => {
+            try {
+                showAlert('Initializing Container Deployment... This will build a Docker image.', 'Dockerize');
+                const res = await api(`/v1/websites/${id}/docker`, 'POST');
+                
+                const logArea = document.getElementById('buildUnifiedLog');
+                logArea.innerText = (res.stdout || '') + (res.stderr || '');
+                
+                const badge = document.getElementById('buildStatusBadge');
+                if (res.status === 'success') {
+                    badge.innerText = 'SUCCESS';
+                    badge.className = 'px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-green-500/20 text-green-500 border border-green-500/20';
+                    showAlert(`Success! Site is now running in container ${res.containerId.substring(0,12)} on port ${res.port}.`, 'Deployed');
+                } else {
+                    badge.innerText = 'FAILED';
+                    badge.className = 'px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-red-500/20 text-red-500 border border-red-500/20';
+                }
+                
+                loadWebsites();
+                openModal('buildLogModal');
+            } catch(e) { 
+                try {
+                    const errData = JSON.parse(e.message);
+                    const logArea = document.getElementById('buildUnifiedLog');
+                    logArea.innerText = (errData.stdout || '') + (errData.stderr || errData.message || 'Unknown error');
+                    const badge = document.getElementById('buildStatusBadge');
+                    badge.innerText = 'FAILED';
+                    badge.className = 'px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-red-500/20 text-red-500 border border-red-500/20';
+                    openModal('buildLogModal');
+                } catch(parseErr) {
+                    showAlert(e.message, 'Docker Deployment Failed'); 
+                }
+            }
+        };
+
+        const handleWebsiteUpload = async (input) => {
+            if(!input.files[0] || !activeWebsiteId) return;
+            const file = input.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const h = { 
+                    'x-appwrite-key': 'secret_key', 
+                    'x-appwrite-jwt': session?.id || '',
+                    'x-appwrite-user-id': session?.user_id || '' 
+                };
+                const r = await fetch(`/v1/websites/${activeWebsiteId}/content`, { method: 'POST', headers: h, body: formData });
+                if(!r.ok) throw new Error(await r.text());
+                showAlert('Website deployed successfully. Your files are now live.', 'Success');
+            } catch(e) { showAlert(e.message, 'Deployment Failed'); }
+            finally { input.value = ''; activeWebsiteId = null; }
+        };
+
+        const saveWebsite = async () => {
+            const name = document.getElementById('siteName').value;
+            const id = document.getElementById('siteIdInput').value || 'unique()';
+            try {
+                await api('/v1/websites', 'POST', { name, websiteId: id });
+                closeModals();
+                loadWebsites();
+                showAlert('Website entry created. You can now upload your build.', 'Success');
+            } catch(e) { showAlert(e.message, 'Error'); }
+        };
+
+        let currentDomainId = null;
+        const triggerWebsiteDomain = (id, domain) => {
+            currentDomainId = id;
+            document.getElementById('siteDomain').value = domain;
+            // Note: cert paths aren't currently returned in the list for security, 
+            // but you can overwrite them here.
+            document.getElementById('siteSslCert').value = '';
+            document.getElementById('siteSslKey').value = '';
+            openModal('websiteDomainModal');
+        };
+
+        const saveWebsiteDomain = async () => {
+            const domain = document.getElementById('siteDomain').value;
+            const sslCert = document.getElementById('siteSslCert').value;
+            const sslKey = document.getElementById('siteSslKey').value;
+            try {
+                await api(`/v1/websites/${currentDomainId}/domain`, 'POST', { domain, sslCert, sslKey });
+                closeModals();
+                loadWebsites();
+                showAlert('Domain settings updated successfully.', 'Success');
+            } catch(e) { showAlert(e.message, 'Error'); }
+        };
+
+        const provisionSsl = async () => {
+            try {
+                showAlert('Requesting Certificate from Let\'s Encrypt... Ensure Port 80 is open and domain points here.', 'SSL Provisioning');
+                const res = await api(`/v1/websites/${currentDomainId}/ssl`, 'POST');
+                showAlert(res.message, 'SSL Success');
+                closeModals();
+                loadWebsites();
+            } catch(e) { showAlert(e.message, 'SSL Failed'); }
+        };
+
+        const deleteWebsite = async (id) => {
+            showConfirm('Are you sure? This will delete the website entry and all hosted files.', async () => {
+                try {
+                    await api(`/v1/websites/${id}`, 'DELETE');
+                    loadWebsites();
+                    showAlert('Website and content removed.', 'Success');
+                } catch(e) { showAlert(e.message, 'Error'); }
+            });
+        };
+
+        let selectedFunctionId = null;
+
+        const loadFunctions = async () => {
+            try {
+                const data = await api('/v1/functions');
+                const list = document.getElementById('functionList');
+                list.innerHTML = data.functions.map(f => `
+                    <div onclick="selectFunction('${f.$id}', '${f.name}')" class="p-4 card-glass cursor-pointer hover:bg-slate-800 transition-all border-l-4 ${selectedFunctionId === f.$id ? 'border-blue-500 bg-slate-800' : 'border-transparent'}">
+                        <div class="text-sm font-bold text-white">${f.name}</div>
+                        <div class="flex justify-between items-center mt-1">
+                            <span class="text-[10px] text-slate-500 font-mono">${f.runtime}</span>
+                            <span class="text-[9px] text-slate-600">${f.$id}</span>
+                        </div>
+                    </div>
+                `).join('');
+                if(data.functions.length === 0) list.innerHTML = '<div class="p-8 text-center text-slate-500 italic text-xs">No functions registered.</div>';
+            } catch(e) { console.error('Load functions failed', e); }
+        };
+
+        const selectFunction = (id, name) => {
+            selectedFunctionId = id;
+            document.getElementById('executionTitle').innerText = `Executions: ${name}`;
+            
+            ['runFunctionBtn', 'uploadCodeBtn', 'gitCloneBtn'].forEach(btnId => {
+                const btn = document.getElementById(btnId);
+                btn.classList.remove('hidden');
+                if (btnId === 'runFunctionBtn') btn.onclick = () => executeFunction(id);
+            });
+
+            loadFunctions(); 
+            loadExecutions(id);
+        };
+
+        const handleCodeUpload = async (input) => {
+            if(!input.files[0] || !selectedFunctionId) return;
+            const file = input.files[0];
+            const formData = new FormData();
+            formData.append('code', file);
+
+            try {
+                const h = { 
+                    'x-appwrite-key': 'secret_key', 
+                    'x-appwrite-jwt': session?.id || '',
+                    'x-appwrite-user-id': session?.user_id || '' 
+                };
+                const r = await fetch(`/v1/functions/${selectedFunctionId}/deployments`, { method: 'POST', headers: h, body: formData });
+                if(!r.ok) throw new Error(await r.text());
+                showAlert('Code deployed successfully. Zip extracted to function directory.', 'Success');
+            } catch(e) { showAlert(e.message, 'Deployment Failed'); }
+            finally { input.value = ''; }
+        };
+
+        const promptGitClone = () => {
+            showPrompt("Enter Git Repository URL (HTTPS):", (url) => {
+                executeGitClone(url);
+            }, "Clone Repository", "https://github.com/user/repo.git");
+        };
+
+        const executeGitClone = async (url) => {
+            try {
+                showAlert('Cloning repository... this may take a moment.', 'Git');
+                await api(`/v1/functions/${selectedFunctionId}/git`, 'POST', { url });
+                showAlert('Repository cloned and deployed successfully.', 'Success');
+            } catch(e) { showAlert(e.message, 'Git Clone Failed'); }
+        };
+
+        const loadExecutions = async (id) => {
+            const list = document.getElementById('executionList');
+            try {
+                const data = await api(`/v1/functions/${id}/executions`);
+                list.innerHTML = data.executions.map(exec => {
+                    const statusColor = exec.status === 'completed' ? 'text-green-400' : 'text-red-400';
+                    const time = new Date(exec.$createdAt).toLocaleString();
+                    return `
+                        <div class="p-4 hover:bg-slate-900/40 transition-all border-b border-slate-800">
+                            <div class="flex justify-between items-start mb-2">
+                                <div class="flex items-center gap-3">
+                                    <span class="text-[10px] font-bold ${statusColor} uppercase tracking-widest px-2 py-0.5 bg-slate-950 rounded border border-slate-800">${exec.status}</span>
+                                    <span class="text-[10px] text-slate-500 font-mono">${exec.$id}</span>
+                                </div>
+                                <span class="text-[10px] text-slate-600">${time}</span>
+                            </div>
+                            <div class="flex gap-4 text-[10px] text-slate-400 mb-3">
+                                <span><i class="bi bi-clock"></i> ${exec.duration.toFixed(3)}s</span>
+                                <span><i class="bi bi-hash"></i> Code ${exec.statusCode}</span>
+                            </div>
+                            <pre class="p-3 bg-black/50 rounded-lg text-[10px] text-slate-400 font-mono overflow-x-auto max-h-32">${exec.stdout || exec.stderr || '(no output)'}</pre>
+                        </div>
+                    `;
+                }).join('');
+                if(data.executions.length === 0) list.innerHTML = '<div class="p-12 text-center text-slate-500 italic text-xs">No execution history found.</div>';
+            } catch(e) { list.innerHTML = `<div class="p-12 text-center text-red-500 text-xs font-bold">Failed to load: ${e.message}</div>`; }
+        };
+
+        const saveFunction = async () => {
+            const name = document.getElementById('funcName').value;
+            const runtime = document.getElementById('funcRuntime').value;
+            const id = document.getElementById('funcId').value || 'unique()';
+            
+            try {
+                await api('/v1/functions', 'POST', { name, runtime, functionId: id });
+                closeModals();
+                loadFunctions();
+                showAlert('Function registered successfully.', 'Success');
+            } catch(e) { showAlert(e.message, 'Error'); }
+        };
+
+        const executeFunction = async (id) => {
+            const list = document.getElementById('executionList');
+            const runBtn = document.getElementById('runFunctionBtn');
+            const original = runBtn.innerHTML;
+            
+            runBtn.disabled = true;
+            runBtn.innerHTML = '<i class="bi bi-cpu animate-spin"></i> Executing...';
+            
+            try {
+                const exec = await api(`/v1/functions/${id}/executions`, 'POST');
+                const statusColor = exec.status === 'completed' ? 'text-green-400' : 'text-red-400';
+                
+                list.innerHTML = `
+                    <div class="p-6 space-y-4 bg-slate-900/50">
+                        <div class="flex justify-between items-center">
+                            <span class="text-xs font-bold uppercase tracking-widest text-slate-500">Last Execution Result</span>
+                            <span class="text-[10px] font-mono text-slate-600">${exec.$id}</span>
+                        </div>
+                        <div class="grid grid-cols-3 gap-4">
+                            <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+                                <div class="text-[9px] text-slate-600 uppercase mb-1">Status</div>
+                                <div class="text-sm font-bold ${statusColor}">${exec.status.toUpperCase()}</div>
+                            </div>
+                            <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+                                <div class="text-[9px] text-slate-600 uppercase mb-1">Duration</div>
+                                <div class="text-sm font-bold text-white">${exec.duration.toFixed(3)}s</div>
+                            </div>
+                            <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+                                <div class="text-[9px] text-slate-600 uppercase mb-1">Exit Code</div>
+                                <div class="text-sm font-bold text-white">${exec.statusCode}</div>
+                            </div>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="text-[9px] text-slate-500 font-bold uppercase">Standard Output</div>
+                            <pre class="p-4 bg-black rounded-xl border border-slate-800 text-[11px] text-slate-300 font-mono overflow-x-auto">${exec.stdout || '(empty)'}</pre>
+                        </div>
+                        ${exec.stderr ? `
+                        <div class="space-y-2">
+                            <div class="text-[9px] text-red-500/50 font-bold uppercase">Standard Error</div>
+                            <pre class="p-4 bg-red-950/20 rounded-xl border border-red-900/30 text-[11px] text-red-400 font-mono overflow-x-auto">${exec.stderr}</pre>
+                        </div>
+                        ` : ''}
+                    </div>
+                ` + list.innerHTML;
+            } catch(e) { 
+                showAlert(e.message, 'Execution Failed'); 
+            } finally {
+                runBtn.disabled = false;
+                runBtn.innerHTML = original;
+            }
+        };
+
+        const loadLogs = async () => {
+            try {
+                const logs = await api('/admin/logs');
+                const container = document.getElementById('logContainer');
+                container.innerHTML = logs.map(l => formatLog(l)).join('');
+                container.scrollTop = container.scrollHeight;
+            } catch(e) { console.error('Failed to load logs', e); }
+        };
+
+        const formatLog = (l) => {
+            const color = l.level === 'ERROR' ? 'text-red-500' : (l.level === 'WARN' ? 'text-yellow-500' : 'text-slate-400');
+            const time = new Date(l.timestamp).toLocaleTimeString();
+            return `<div class="py-0.5 border-b border-white/5"><span class="text-slate-600">[${time}]</span> <span class="${color} font-bold w-12 inline-block">${l.level}</span> <span class="text-slate-300">${l.message}</span></div>`;
+        };
+
+        const clearLogs = () => {
+            document.getElementById('logContainer').innerHTML = '';
+        };
+
+        const loadSmtpConfig = async () => {
+            try {
+                const s = await api('/admin/smtp');
+                document.getElementById('smtpHost').value = s.host;
+                document.getElementById('smtpPort').value = s.port;
+                document.getElementById('smtpUser').value = s.username;
+                document.getElementById('smtpPass').value = s.password;
+                document.getElementById('smtpFrom').value = s.from_email;
+                document.getElementById('smtpEnabled').checked = s.enabled;
+            } catch(e) { console.warn('SMTP not configured yet'); }
+        };
+
+        const saveSmtpConfig = async () => {
+            const config = {
+                host: document.getElementById('smtpHost').value,
+                port: parseInt(document.getElementById('smtpPort').value),
+                username: document.getElementById('smtpUser').value,
+                password: document.getElementById('smtpPass').value,
+                from_email: document.getElementById('smtpFrom').value,
+                enabled: document.getElementById('smtpEnabled').checked
+            };
+            try {
+                await api('/admin/smtp', 'POST', config);
+                showAlert('SMTP Settings Saved', 'Success');
+            } catch(e) { showAlert('Failed to save SMTP settings: ' + e.message, 'Error'); }
+        };
+
+        const setupRealtime = () => {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${protocol}//${location.host}/v1/realtime`);
+            
+            ws.onmessage = (e) => {
+                const event = JSON.parse(e.data);
+                if (event.type === 'log') {
+                    const container = document.getElementById('logContainer');
+                    const atBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 10;
+                    container.insertAdjacentHTML('beforeend', formatLog(event.data));
+                    if (atBottom) container.scrollTop = container.scrollHeight;
+                }
+                
+                if (event.type === 'traffic') {
+                    const list = document.getElementById('trafficLiveList');
+                    if (list.querySelector('td[colspan]')) list.innerHTML = ''; // Clear placeholder
+                    
+                    const t = event.data;
+                    const statusColor = t.status >= 400 ? 'text-red-500' : (t.status >= 300 ? 'text-yellow-500' : 'text-green-500');
+                    const methodColor = t.method === 'POST' ? 'text-blue-400' : (t.method === 'GET' ? 'text-purple-400' : 'text-slate-400');
+                    
+                    const row = `
+                        <tr class="hover:bg-slate-900/40 animate-in fade-in slide-in-from-left duration-300">
+                            <td class="p-4 font-bold ${methodColor}">${t.method}</td>
+                            <td class="p-4 text-slate-300 truncate max-w-xs">${t.path}</td>
+                            <td class="p-4"><span class="font-bold ${statusColor}">${t.status}</span></td>
+                            <td class="p-4 text-slate-500">${t.latency}ms</td>
+                            <td class="p-4 text-slate-600 text-[10px]">${t.ip}</td>
+                            <td class="p-4 text-right text-blue-500/50 text-[9px] font-bold">${t.website_id}</td>
+                        </tr>
+                    `;
+                    list.insertAdjacentHTML('afterbegin', row);
+                    if (list.children.length > 20) list.lastElementChild.remove();
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('Realtime WS closed, reconnecting in 3s...');
+                setTimeout(setupRealtime, 3000);
+            };
+        };
+
+        const loadFiles = async () => {
+            try {
+                const data = await api('/v1/storage/buckets/default/files');
+                const list = document.getElementById('fileList');
+                list.innerHTML = data.files.map(f => `
+                    <tr class="hover:bg-slate-900/20 transition-all">
+                        <td class="p-4 font-bold text-white">${f.name}</td>
+                        <td class="p-4 text-xs text-slate-500 font-mono">${f.mime_type}</td>
+                        <td class="p-4 text-xs text-slate-400">${(f.size_bytes / 1024).toFixed(1)} KB</td>
+                        <td class="p-4 text-[10px] text-slate-500">${new Date(f.$createdAt).toLocaleString()}</td>
+                        <td class="p-4 text-right">
+                            <div class="flex justify-end gap-1">
+                                <a href="/v1/storage/buckets/default/files/${f.$id}/view" target="_blank" class="p-2 hover:bg-slate-800 text-slate-500 hover:text-blue-400 rounded-lg transition-all">
+                                    <i class="bi bi-eye"></i>
+                                </a>
+                                <button onclick="deleteFile('${f.$id}')" class="p-2 hover:bg-red-500/20 text-slate-500 hover:text-red-500 rounded-lg transition-all">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `).join('');
+                if(data.files.length === 0) list.innerHTML = '<tr><td colspan="5" class="p-8 text-center text-slate-500 italic">No encrypted files found in storage.</td></tr>';
+            } catch(e) { console.error('Load files failed', e); }
+        };
+
+        const handleFileUpload = async (input) => {
+            if(!input.files[0]) return;
+            const file = input.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('fileId', 'unique()');
+
+            try {
+                const h = { 
+                    'x-appwrite-key': 'secret_key', 
+                    'x-appwrite-project': 'console',
+                    'x-appwrite-jwt': session?.id || '',
+                    'x-appwrite-user-id': session?.user_id || '' 
+                };
+                const r = await fetch('/v1/storage/buckets/default/files', { method: 'POST', headers: h, body: formData });
+                if(!r.ok) throw new Error(await r.text());
+                showAlert('File encrypted and uploaded to S3', 'Success');
+                loadFiles();
+            } catch(e) { showAlert(e.message, 'Upload Failed'); }
+            finally { input.value = ''; }
+        };
+
+        const deleteFile = async (id) => {
+            showConfirm('Permanently delete this encrypted file from S3?', async () => {
+                try {
+                    await api(`/v1/storage/buckets/default/files/${id}`, 'DELETE');
+                    loadFiles();
+                } catch(e) { showAlert(e.message, 'Error'); }
+            });
+        };
+
+        const toggleStorageFields = () => {
+            const provider = document.getElementById('storageProvider').value;
+            document.querySelectorAll('.s3-field').forEach(el => {
+                el.style.display = provider === 's3' ? 'block' : 'none';
+            });
+        };
+
+        const loadS3Config = async () => {
+            try {
+                const s = await api('/admin/s3');
+                document.getElementById('storageProvider').value = s.provider;
+                document.getElementById('s3Bucket').value = s.bucket;
+                document.getElementById('s3Region').value = s.region;
+                document.getElementById('s3Access').value = s.access_key;
+                document.getElementById('s3Secret').value = s.secret_key;
+                document.getElementById('s3Endpoint').value = s.endpoint || '';
+                document.getElementById('s3Enabled').checked = s.enabled;
+                toggleStorageFields();
+            } catch(e) { console.warn('Storage not configured yet'); }
+        };
+
+        const saveS3Config = async () => {
+            const config = {
+                provider: document.getElementById('storageProvider').value,
+                bucket: document.getElementById('s3Bucket').value,
+                region: document.getElementById('s3Region').value,
+                access_key: document.getElementById('s3Access').value,
+                secret_key: document.getElementById('s3Secret').value,
+                endpoint: document.getElementById('s3Endpoint').value || null,
+                enabled: document.getElementById('s3Enabled').checked
+            };
+            try {
+                await api('/admin/s3', 'POST', config);
+                showAlert('Storage Configuration saved and provider initialized', 'Success');
+                closeModals();
+            } catch(e) { showAlert(e.message, 'Error'); }
         };
 
         const loadSecurityStatus = async () => {
             try {
                 const s = await api('/admin/security/status');
                 const attackStatus = document.getElementById('attackStatus');
+                const lockdownStatus = document.getElementById('lockdownStatus');
                 const lbToggle = document.getElementById('lbBtn');
                 const redisCount = document.getElementById('redisCount');
 
                 if (attackStatus) {
                     attackStatus.innerText = s.under_attack ? 'ACTIVATED' : 'DISABLED';
                     attackStatus.className = `px-2 py-0.5 rounded text-[10px] font-bold ${s.under_attack ? 'bg-red-500 text-white' : 'bg-slate-800 text-slate-500'}`;
+                }
+
+                if (lockdownStatus) {
+                    lockdownStatus.innerText = s.lockdown_mode ? 'ACTIVE' : 'INACTIVE';
+                    lockdownStatus.className = `px-2 py-0.5 rounded text-[10px] font-bold ${s.lockdown_mode ? 'bg-orange-500 text-white' : 'bg-slate-800 text-slate-500'}`;
                 }
                 
                 if (lbToggle) {
@@ -589,6 +1609,22 @@
             openModal('confirmAttackModal');
         };
 
+        const toggleLockdown = async () => {
+            const btn = document.getElementById('lockdownBtn');
+            const original = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="bi bi-shield-lock-fill animate-pulse"></i> Updating...';
+            try {
+                const res = await api('/admin/security/lockdown', 'POST');
+                showAlert(res.message, 'System Lockdown');
+                await loadSecurityStatus();
+            } catch(e) { showAlert(e.message, 'Error'); }
+            finally {
+                btn.disabled = false;
+                btn.innerHTML = original;
+            }
+        };
+
         const executeAttackMode = async () => {
             closeModals();
             const btn = document.getElementById('attackBtn');
@@ -600,7 +1636,8 @@
             try {
                 await api('/admin/security/attack', 'POST');
                 await loadSecurityStatus();
-            } catch(e) { alert('Emergency Mode Error: ' + e.message); }
+                showAlert('Emergency Protocol Executed. Key rotated and sessions cleared.', 'Security');
+            } catch(e) { showAlert('Emergency Mode Error: ' + e.message, 'Critical Error'); }
             finally {
                 if (btn) {
                     btn.disabled = false;
@@ -614,7 +1651,7 @@
             try {
                 await api('/admin/security/load-balancer', 'POST');
                 await loadSecurityStatus();
-            } catch(e) { alert('Load Balancer Error: ' + e.message); }
+            } catch(e) { showAlert('Load Balancer Error: ' + e.message, 'Error'); }
         };
 
         const triggerReroll = () => {
@@ -631,9 +1668,21 @@
             closeModals();
             try {
                 await api('/admin/security/wipe', 'POST');
-                alert('System Reset Complete. Logging out.');
-                logout();
-            } catch(e) { alert('Wipe Error: ' + e.message); }
+                showAlert('System Reset Complete. Logging out.', 'Success');
+                setTimeout(logout, 2000);
+            } catch(e) { showAlert('Wipe Error: ' + e.message, 'Error'); }
+        };
+
+        const restartServer = async () => {
+            showConfirm('Restart the server process? This will briefly disconnect all users.', async () => {
+                try {
+                    const res = await api('/admin/server/restart', 'POST');
+                    showAlert(res.message, 'Server Restarting');
+                    setTimeout(() => {
+                        location.reload();
+                    }, 3000);
+                } catch(e) { showAlert('Restart failed: ' + e.message, 'Error'); }
+            });
         };
 
         const executeReroll = async () => {
@@ -646,9 +1695,9 @@
             }
             try {
                 await api('/admin/security/reroll', 'POST');
-                alert('Success: Encryption key rotated and data re-encrypted across all nodes.');
+                showAlert('Success: Encryption key rotated and data re-encrypted across all nodes.', 'Key Rotation');
                 await loadSecurityStatus();
-            } catch(e) { alert('Critical Error: ' + e.message); }
+            } catch(e) { showAlert('Critical Error: ' + e.message, 'Error'); }
             finally {
                 if (btn) {
                     btn.disabled = false;
@@ -703,23 +1752,23 @@
         const addMirror = async () => {
             const name = document.getElementById('dbName').value;
             const url = document.getElementById('dbUrl').value;
-            if(!name || !url) return alert('Name and URL are required');
+            if(!name || !url) return showAlert('Name and URL are required', 'Warning');
             try {
                 await api('/admin/databases', 'POST', { name, url });
                 closeModals();
                 loadDbStatus();
-            } catch(e) { alert(e.message); }
+            } catch(e) { showAlert(e.message, 'Error'); }
         };
 
         const addRedisMirror = async () => {
             const name = document.getElementById('redisName').value;
             const url = document.getElementById('redisUrlInput').value;
-            if(!name || !url) return alert('Name and URL are required');
+            if(!name || !url) return showAlert('Name and URL are required', 'Warning');
             try {
                 await api('/admin/redis', 'POST', { name, url });
                 closeModals();
                 loadDbStatus();
-            } catch(e) { alert(e.message); }
+            } catch(e) { showAlert(e.message, 'Error'); }
         };
 
         const loadStats = async () => {
@@ -771,9 +1820,28 @@
                 const data = await api(`/data/${id}`);
                 body.innerHTML = `
                     <div class="p-4 bg-slate-950 rounded-xl border border-slate-800 text-[10px] text-green-400 font-mono overflow-auto max-h-96 whitespace-pre-wrap">${JSON.stringify(data, null, 2)}</div>
-                    <button class="w-full py-2 bg-slate-900 rounded-lg text-[10px] font-bold mt-2 hover:bg-slate-800">Copy to Clipboard</button>
+                    <div class="flex gap-2 mt-4">
+                        <button onclick="copyToClipboard('${id}')" class="flex-1 py-2 bg-slate-900 rounded-lg text-[10px] font-bold hover:bg-slate-800">Copy ID</button>
+                        <button onclick="deleteRecord('${id}')" class="flex-1 py-2 bg-red-900/20 text-red-500 rounded-lg text-[10px] font-bold hover:bg-red-900/40 transition-all">Delete Record</button>
+                    </div>
                 `;
             } catch(e) { body.innerHTML = '<div class="p-4 bg-red-900/20 rounded-xl border border-red-900/30 text-red-400 text-xs font-bold">Access Denied</div>'; }
+        };
+
+        const deleteRecord = async (id) => {
+            showConfirm('Permanently delete this encrypted record?', async () => {
+                try {
+                    await api(`/data/${id}`, 'DELETE');
+                    document.getElementById('inspectContent').innerHTML = '<div class="p-4 bg-slate-950/50 rounded-xl border border-slate-800 text-slate-500 italic">Record deleted.</div>';
+                    loadRecords();
+                    loadStats();
+                } catch(e) { showAlert('Delete failed: ' + e.message, 'Error'); }
+            }, 'Confirm Deletion');
+        };
+
+        const copyToClipboard = (text) => {
+            navigator.clipboard.writeText(text);
+            showAlert('Copied to clipboard', 'Clipboard');
         };
 
         const loadUsers = async () => {
@@ -782,9 +1850,41 @@
                 <tr class="hover:bg-slate-900/20 transition-all">
                     <td class="p-4 font-bold text-white">${user.username}</td>
                     <td class="p-4 text-slate-500 text-xs">${new Date(user.created_at).toLocaleString()}</td>
-                    <td class="p-4 text-right font-mono text-[10px] text-slate-600">${user.id}</td>
+                    <td class="p-4">
+                        <span class="px-2 py-0.5 rounded text-[10px] font-bold ${user.status ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}">
+                            ${user.status ? 'ACTIVE' : 'SUSPENDED'}
+                        </span>
+                    </td>
+                    <td class="p-4 font-mono text-[10px] text-slate-600">${user.id}</td>
+                    <td class="p-4 text-right">
+                        <div class="flex justify-end gap-1">
+                            <button onclick="toggleUserStatus('${user.id}')" title="${user.status ? 'Suspend' : 'Activate'}" class="p-2 hover:bg-slate-800 text-slate-500 hover:text-white rounded-lg transition-all">
+                                <i class="bi bi-${user.status ? 'person-dash' : 'person-check'}"></i>
+                            </button>
+                            <button onclick="deleteUser('${user.id}')" title="Delete" class="p-2 hover:bg-red-500/20 text-slate-500 hover:text-red-500 rounded-lg transition-all">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </td>
                 </tr>
             `).join('');
+        };
+
+        const toggleUserStatus = async (id) => {
+            try {
+                await api(`/admin/users/${id}/status`, 'POST');
+                loadUsers();
+            } catch(e) { showAlert('Status update failed: ' + e.message, 'Error'); }
+        };
+
+        const deleteUser = async (id) => {
+            showConfirm('Are you sure? This will delete the user and all their encrypted data.', async () => {
+                try {
+                    await api(`/admin/users/${id}`, 'DELETE');
+                    loadUsers();
+                    loadStats();
+                } catch(e) { showAlert('Delete failed: ' + e.message, 'Error'); }
+            }, 'Confirm Deletion');
         };
 
         const loadRoles = async () => {
@@ -815,7 +1915,7 @@
             const id = document.getElementById('targetId').value;
             const rs = Array.from(document.querySelectorAll('.role-check:checked')).map(c => c.value);
             await api('/profile', 'POST', { user_id: id, roles: rs });
-            alert('Policy updated');
+            showAlert('Policy updated', 'Success');
         };
 
         const saveRoleDef = async () => {
@@ -839,6 +1939,43 @@
             document.getElementById(id).classList.remove('hidden');
         };
         const closeModals = () => document.getElementById('modalOverlay').classList.replace('flex', 'hidden');
+
+        const showAlert = (msg, title = 'Notification') => {
+            document.getElementById('alertTitle').innerText = title;
+            document.getElementById('alertMessage').innerText = msg;
+            openModal('genericAlertModal');
+        };
+
+        const showConfirm = (msg, onConfirm, title = 'Are you sure?') => {
+            document.getElementById('confirmTitle').innerText = title;
+            document.getElementById('confirmMessage').innerText = msg;
+            const btn = document.getElementById('confirmActionButton');
+            const newBtn = btn.cloneNode(true);
+            btn.parentNode.replaceChild(newBtn, btn);
+            newBtn.addEventListener('click', () => {
+                closeModals();
+                onConfirm();
+            });
+            openModal('genericConfirmModal');
+        };
+
+        const showPrompt = (msg, onValue, title = 'Input Required', placeholder = '...') => {
+            document.getElementById('promptTitle').innerText = title;
+            document.getElementById('promptMessage').innerText = msg;
+            const input = document.getElementById('promptInput');
+            input.value = '';
+            input.placeholder = placeholder;
+            const btn = document.getElementById('promptActionButton');
+            const newBtn = btn.cloneNode(true);
+            btn.parentNode.replaceChild(newBtn, btn);
+            newBtn.addEventListener('click', () => {
+                const val = input.value;
+                closeModals();
+                if (val) onValue(val);
+            });
+            openModal('genericPromptModal');
+            setTimeout(() => input.focus(), 100);
+        };
 
         const initApp = async () => {
             if(!session) return;
@@ -864,6 +2001,7 @@
             const displayName = session.username || 'User';
             document.getElementById('currentUsername').innerText = displayName;
             document.getElementById('userInitial').innerText = displayName[0] ? displayName[0].toUpperCase() : 'U';
+            setupRealtime();
             showTab('dashboard');
         };
 

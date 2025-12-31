@@ -16,10 +16,13 @@ pub struct AppState {
     pub appwrite_api_key: String,
     pub session_duration: u64,
     pub under_attack: Arc<AtomicBool>,
+    pub lockdown_mode: Arc<AtomicBool>,
     pub load_balancer_mode: Arc<AtomicBool>,
     pub redis_read_index: Arc<AtomicUsize>,
     pub total_requests: Arc<AtomicUsize>,
     pub realtime_sender: tokio::sync::broadcast::Sender<String>,
+    pub logs: Arc<RwLock<Vec<crate::models::LogEntry>>>,
+    pub s3_client: Arc<RwLock<Option<s3::Bucket>>>,
 }
 
 pub async fn init_db(database_url: &str) -> Result<Pool<Postgres>> {
@@ -132,6 +135,17 @@ pub async fn init_db(database_url: &str) -> Result<Pool<Postgres>> {
             IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_username_key') THEN
                 ALTER TABLE users DROP CONSTRAINT users_username_key;
             END IF;
+
+            -- Email Verification Migration
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='email_verified') THEN
+                ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='verification_token') THEN
+                ALTER TABLE users ADD COLUMN verification_token TEXT;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='status') THEN
+                ALTER TABLE users ADD COLUMN status BOOLEAN NOT NULL DEFAULT TRUE;
+            END IF;
         END $$;
         "#
     )
@@ -161,6 +175,179 @@ pub async fn init_db(database_url: &str) -> Result<Pool<Postgres>> {
             name TEXT NOT NULL,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
+    // Ensure smtp_config table exists
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS smtp_config (
+            id SERIAL PRIMARY KEY,
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL,
+            username TEXT NOT NULL,
+            password TEXT NOT NULL,
+            from_email TEXT NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT FALSE
+        );
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
+    // Ensure s3_config table exists
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS s3_config (
+            id SERIAL PRIMARY KEY,
+            provider TEXT NOT NULL DEFAULT 's3',
+            bucket TEXT NOT NULL,
+            region TEXT NOT NULL,
+            access_key TEXT NOT NULL,
+            secret_key TEXT NOT NULL,
+            endpoint TEXT,
+            enabled BOOLEAN NOT NULL DEFAULT FALSE
+        );
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
+    // Migration: Add provider to s3_config if missing
+    sqlx::query(
+        r#"
+        DO $$ 
+        BEGIN 
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='s3_config' AND column_name='provider') THEN
+                ALTER TABLE s3_config ADD COLUMN provider TEXT NOT NULL DEFAULT 's3';
+            END IF;
+        END $$;
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
+    // Ensure storage_metadata table exists
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS storage_metadata (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            size_bytes BIGINT NOT NULL,
+            user_id TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
+    // Ensure functions table exists
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS functions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            runtime TEXT NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
+    // Ensure executions table exists
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS executions (
+            id TEXT PRIMARY KEY,
+            function_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            stdout TEXT NOT NULL DEFAULT '',
+            stderr TEXT NOT NULL DEFAULT '',
+            duration FLOAT NOT NULL DEFAULT 0,
+            status_code INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
+    // Ensure websites table exists
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS websites (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            domain TEXT,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            container_id TEXT,
+            port INTEGER,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
+    // Ensure websites table exists
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS waf_logs (
+            id SERIAL PRIMARY KEY,
+            ip TEXT NOT NULL,
+            path TEXT NOT NULL,
+            violation TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
+    // Ensure traffic_logs table exists
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS traffic_logs (
+            id SERIAL PRIMARY KEY,
+            website_id TEXT NOT NULL,
+            ip TEXT NOT NULL,
+            method TEXT NOT NULL,
+            path TEXT NOT NULL,
+            status_code INTEGER NOT NULL,
+            latency_ms BIGINT NOT NULL,
+            bytes_sent BIGINT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
+    // Migration for websites table
+    sqlx::query(
+        r#"
+        DO $$ 
+        BEGIN 
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='websites' AND column_name='container_id') THEN
+                ALTER TABLE websites ADD COLUMN container_id TEXT;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='websites' AND column_name='port') THEN
+                ALTER TABLE websites ADD COLUMN port INTEGER;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='websites' AND column_name='ssl_cert') THEN
+                ALTER TABLE websites ADD COLUMN ssl_cert TEXT;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='websites' AND column_name='ssl_key') THEN
+                ALTER TABLE websites ADD COLUMN ssl_key TEXT;
+            END IF;
+        END $$;
         "#
     )
     .execute(&pool)
@@ -225,10 +412,33 @@ pub async fn init_mirrors(pool: &Pool<Postgres>) -> Result<Vec<Pool<Postgres>>> 
                                 Err(e) => log::error!("Failed to initialize mirror {}: {}", url, e),
                             }
                         }
-                        Ok(mirrors)
+                            Ok(mirrors)
+                        }
+                        
+                        pub async fn ensure_collection_table(pool: &Pool<Postgres>, db_id: &str, col_id: &str) -> Result<String> {
+                            // Sanitize table name: only alphanumeric and underscores
+                            let sanitized_db = db_id.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+                            let sanitized_col = col_id.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+                            let table_name = format!("coll_{}_{}", sanitized_db, sanitized_col);
+                        
+                            let query = format!(
+                                r#"
+                                CREATE TABLE IF NOT EXISTS {} (
+                                    id UUID PRIMARY KEY,
+                                    user_id TEXT NOT NULL,
+                                    encrypted_content TEXT NOT NULL,
+                                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                                );
+                                "#,
+                                table_name
+                            );
+                        
+                            sqlx::query(&query).execute(pool).await?;
+                            Ok(table_name)
                         }
                         
                         async fn sync_mirrors(primary: &Pool<Postgres>, mirror: &Pool<Postgres>, data_store_cols: &[String]) -> Result<()> {
+                        
                         // 1. Sync roles_definition
                         let roles = sqlx::query("SELECT name, permissions FROM roles_definition")
                             .fetch_all(primary)
@@ -244,7 +454,7 @@ pub async fn init_mirrors(pool: &Pool<Postgres>) -> Result<Vec<Pool<Postgres>>> 
                         }
                         
                         // 2. Sync users
-                        let users = sqlx::query("SELECT id, username, email, password_hash, created_at FROM users")
+                        let users = sqlx::query("SELECT id, username, email, password_hash, created_at, email_verified, verification_token, status FROM users")
                             .fetch_all(primary)
                             .await?;
                         for user in users {
@@ -253,12 +463,19 @@ pub async fn init_mirrors(pool: &Pool<Postgres>) -> Result<Vec<Pool<Postgres>>> 
                             let email: String = user.get("email");
                             let hash: String = user.get("password_hash");
                             let created: chrono::DateTime<chrono::Utc> = user.get("created_at");
-                            sqlx::query("INSERT INTO users (id, username, email, password_hash, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING")
+                            let verified: bool = user.get("email_verified");
+                            let token: Option<String> = user.get("verification_token");
+                            let status: bool = user.get("status");
+
+                            sqlx::query("INSERT INTO users (id, username, email, password_hash, created_at, email_verified, verification_token, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO UPDATE SET email_verified = EXCLUDED.email_verified, verification_token = EXCLUDED.verification_token, status = EXCLUDED.status, email = EXCLUDED.email, username = EXCLUDED.username")
                                 .bind(id)
                                 .bind(username)
                                 .bind(email)
                                 .bind(hash)
                                 .bind(created)
+                                .bind(verified)
+                                .bind(token)
+                                .bind(status)
                                 .execute(mirror)
                                 .await?;
                         }
@@ -316,6 +533,23 @@ pub async fn init_mirrors(pool: &Pool<Postgres>) -> Result<Vec<Pool<Postgres>>> 
                                 }
                             }
                             q.execute(mirror).await?;
+                        }
+
+                        // 5. Sync websites
+                        let website_rows = sqlx::query("SELECT id, name, domain, enabled, container_id, port, created_at FROM websites")
+                            .fetch_all(primary)
+                            .await?;
+                        for row in website_rows {
+                            sqlx::query("INSERT INTO websites (id, name, domain, enabled, container_id, port, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, domain = EXCLUDED.domain, enabled = EXCLUDED.enabled, container_id = EXCLUDED.container_id, port = EXCLUDED.port")
+                                .bind(row.get::<String, _>("id"))
+                                .bind(row.get::<String, _>("name"))
+                                .bind(row.get::<Option<String>, _>("domain"))
+                                .bind(row.get::<bool, _>("enabled"))
+                                .bind(row.get::<Option<String>, _>("container_id"))
+                                .bind(row.get::<Option<i32>, _>("port"))
+                                .bind(row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"))
+                                .execute(mirror)
+                                .await?;
                         }
                         
                         Ok(())

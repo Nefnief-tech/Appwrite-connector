@@ -1,0 +1,53 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://connector_user:connector_pass@db:5432/connector_db
+      - REDIS_URL=redis://redis:6379
+      - APPWRITE_API_KEY=secret_key
+      - ENCRYPTION_KEY=your-32-byte-master-encryption-key-here
+      - SESSION_DURATION=3600
+      - HOST=0.0.0.0
+      - PORT=8080
+    volumes:
+      - ./storage:/usr/app/storage
+      - ./keys.json:/usr/app/keys.json
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=connector_user
+      - POSTGRES_PASSWORD=connector_pass
+      - POSTGRES_DB=connector_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U connector_user -d connector_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
